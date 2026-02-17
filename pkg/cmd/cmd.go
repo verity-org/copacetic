@@ -36,6 +36,7 @@ type patchArgs struct {
 	timeout           time.Duration
 	scanner           string
 	ignoreError       bool
+	force             bool
 	format            string
 	output            string
 	bkOpts            buildkit.Opts
@@ -49,6 +50,7 @@ type patchArgs struct {
 	eolAPIBaseURL     string
 	exitOnEOL         bool
 	configFile        string
+	patchedReportsDir string
 }
 
 func NewPatchCmd() *cobra.Command {
@@ -90,6 +92,7 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 				Timeout:           ua.timeout,
 				Scanner:           ua.scanner,
 				IgnoreError:       ua.ignoreError,
+				Force:             ua.force,
 				Format:            ua.format,
 				Output:            ua.output,
 				BkAddr:            ua.bkOpts.Addr,
@@ -106,6 +109,7 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 				EOLAPIBaseURL:     ua.eolAPIBaseURL,
 				ExitOnEOL:         ua.exitOnEOL,
 				ConfigFile:        ua.configFile,
+				PatchedReportsDir: ua.patchedReportsDir,
 			}
 
 			if ua.configFile == "" && ua.appImage == "" {
@@ -131,6 +135,7 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 	}
 	flags := patchCmd.Flags()
 	flags.StringVar(&ua.configFile, "config", "", "Path to a bulk patch YAML config file (Comprehensive update only). Cannot be used with --image, --report, or --tag.")
+	flags.StringVar(&ua.patchedReportsDir, "patched-reports-dir", "", "Directory containing vulnerability reports for patched images (for skip detection)")
 	flags.StringVarP(&ua.appImage, "image", "i", "", "Application image name and tag to patch")
 	flags.StringVarP(&ua.report, "report", "r", "", "Vulnerability report file or directory path")
 	flags.StringVarP(&ua.patchedTag, "tag", "t", "", "Tag for the patched image")
@@ -145,6 +150,7 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 	flags.DurationVar(&ua.timeout, "timeout", 5*time.Minute, "Timeout for the operation, defaults to '5m'")
 	flags.StringVarP(&ua.scanner, "scanner", "s", "trivy", "Scanner used to generate the report, defaults to 'trivy'")
 	flags.BoolVar(&ua.ignoreError, "ignore-errors", false, "Ignore errors and continue patching (for single-platform: continue with other packages; for multi-platform: continue with other platforms)")
+	flags.BoolVar(&ua.force, "force", false, "Force re-patching even if the patched image has no fixable vulnerabilities")
 	flags.StringVarP(&ua.format, "format", "f", "openvex", "Output format, defaults to 'openvex'")
 	flags.StringVarP(&ua.output, "output", "o", "", "Output file path")
 	flags.BoolVarP(&ua.push, "push", "p", false, "Push patched image to destination registry")

@@ -21,11 +21,12 @@ import (
 
 // patchJobStatus represents the status of a single image patching job.
 type patchJobStatus struct {
-	Name   string
-	Source string
-	Target string
-	Status string
-	Error  error
+	Name    string
+	Source  string
+	Target  string
+	Status  string
+	Error   error
+	Details string
 }
 
 // PatchFromConfig orchestrates the bulk patching process based on a configuration file.
@@ -78,6 +79,12 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 
 	log.Debugf("Total number of patch jobs to execute: %d", len(jobsToRun))
 
+	// Build report index once before workers start
+	var reports *reportIndex
+	if opts.PatchedReportsDir != "" {
+		reports = buildReportIndex(opts.PatchedReportsDir)
+	}
+
 	numWorkers := runtime.NumCPU()
 
 	// Initialize a worker pool with a number of workers equal to the number of CPUs.
@@ -119,11 +126,34 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 					continue
 				}
 
-				log.Debugf("[Worker %d] --> Starting patch for %s", workerID, imageWithTag)
+				// Evaluate whether patching is needed and resolve the final tag
+				action := evaluatePatchAction(spec.Image, targetTag, opts.Scanner, opts.Force, reports)
+				if action.ShouldSkip {
+					// Record as skipped
+					mu.Lock()
+					results = append(results, patchJobStatus{
+						Name:    spec.Name,
+						Source:  imageWithTag,
+						Target:  action.ResolvedTag,
+						Status:  "Skipped",
+						Details: action.Reason,
+					})
+					mu.Unlock()
+					log.Debugf("[Worker %d] --> Skipping patch for %s: %s", workerID, imageWithTag, action.Reason)
+					continue
+				}
+
+				// Use the resolved tag (may be version-bumped)
+				finalTag := action.ResolvedTag
+				if finalTag == "" {
+					finalTag = targetTag
+				}
+
+				log.Debugf("[Worker %d] --> Starting patch for %s with tag %s", workerID, imageWithTag, finalTag)
 
 				jobOpts := *opts // Shallow copy of the global options
 				jobOpts.Image = imageWithTag
-				jobOpts.PatchedTag = targetTag
+				jobOpts.PatchedTag = finalTag
 				jobOpts.Platforms = spec.Platforms
 				jobOpts.Suffix = ""
 
@@ -222,6 +252,8 @@ func printSummary(results []patchJobStatus) {
 		details := "OK"
 		if res.Error != nil {
 			details = res.Error.Error()
+		} else if res.Details != "" {
+			details = res.Details
 		}
 		row := fmt.Sprintf("%s\t%s\t%s\t%s\t%s", res.Name, res.Status, res.Source, res.Target, details)
 		fmt.Fprintln(writer, row)

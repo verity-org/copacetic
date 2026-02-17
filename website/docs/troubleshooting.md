@@ -2,6 +2,53 @@
 title: Troubleshooting
 ---
 
+## Bulk Patching: Images Not Being Skipped
+
+When using [bulk image patching](./bulk-image-patching.md) with `--push` and `--patched-reports-dir`, Copa checks vulnerability reports to avoid unnecessary re-patching. If images are not being skipped as expected:
+
+**Check Reports Directory**
+- The skip feature requires the `--patched-reports-dir` flag
+- Without this flag, Copa will always patch (no skip detection)
+- Verify the directory path is correct and accessible
+
+**Check Report Files**
+- Report files must contain an `ArtifactName` field (standard in Trivy JSON output)
+- Copa reads the `ArtifactName` from inside each JSON report to match it to images
+- You can name report files anything you want (e.g., `nginx-report.json`, `alpine.json`)
+- If no matching `ArtifactName` is found, Copa proceeds with patching (fail-open)
+
+**Verify Report Contents**
+- Reports must be in a format Copa can parse (Trivy JSON, native format, etc.)
+- Ensure reports were generated for the correct patched image tags
+- Empty or invalid reports trigger fail-open behavior (proceeds with patching)
+
+**Check Scanner Configuration**
+- Use the `--scanner` flag to specify the report format (default: `trivy`)
+- Supported scanners: `trivy`, `native`, custom plugins
+- The scanner must match the format of your report files
+
+**Force Re-patching**
+- Use `--force` flag to bypass report checks and always create new versioned tags
+- Example: `copa patch --config bulk.yaml --push --patched-reports-dir ./reports --force`
+
+**Registry Access**
+- Skip detection queries the registry for existing patched tags
+- Ensure Copa has read access to the target registry
+- Registry errors trigger fail-open behavior (proceeds with patching)
+
+**Scan Workflow**
+```bash
+# 1. Patch images
+copa patch --config bulk.yaml --push
+
+# 2. Scan patched images (not source images!)
+# Name files however you want - Copa reads ArtifactName from the JSON
+trivy image registry.io/nginx:1.25.3-patched -f json -o reports/nginx-patched.json
+
+# 3. Run with skip detection
+copa patch --config bulk.yaml --push --patched-reports-dir ./reports
+```
+
 ## Getting `downloaded package ... version ... lower than required ... for update` error when trying to patch an image
 
 This error means that the package manager is trying to install a version of the package that is lower than the version that was required from the scanner report. This can happen for a few reasons:
