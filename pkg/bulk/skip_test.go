@@ -529,7 +529,7 @@ func TestEvaluatePatchAction(t *testing.T) {
 			oldCheck := checkReportForVulnerabilities
 			defer func() { checkReportForVulnerabilities = oldCheck }()
 			checkCalled := false
-			checkReportForVulnerabilities = func(reportPath, scanner string) (bool, error) {
+			checkReportForVulnerabilities = func(reportPath, scanner, pkgTypes, libraryPatchLevel string) (bool, error) {
 				checkCalled = true
 				if tt.reportError != nil {
 					return false, tt.reportError
@@ -537,7 +537,7 @@ func TestEvaluatePatchAction(t *testing.T) {
 				return tt.reportResult, nil
 			}
 
-			result := evaluatePatchAction(tt.repo, tt.baseTag, tt.scanner, tt.force, tt.reports)
+			result := evaluatePatchAction(tt.repo, tt.baseTag, tt.scanner, tt.force, tt.reports, "os", "patch")
 
 			assert.Equal(t, tt.expectedSkip, result.ShouldSkip, "ShouldSkip mismatch")
 			assert.Equal(t, tt.expectedReason, result.Reason, "Reason mismatch")
