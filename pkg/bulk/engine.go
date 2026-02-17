@@ -74,7 +74,7 @@ func buildTargetRepository(sourceImage, targetRegistry string) (string, error) {
 
 // PatchFromConfig orchestrates the bulk patching process based on a configuration file.
 func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options) error {
-	yamlFile, err := os.ReadFile(configPath)
+	yamlFile, err := os.ReadFile(configPath) // #nosec G304 - configPath is provided by user via CLI flag
 	if err != nil {
 		return fmt.Errorf("failed to read config file %s: %w", configPath, err)
 	}
@@ -328,6 +328,8 @@ func printSummary(results []patchJobStatus) {
 	}
 
 	// Flush the writer to ensure all content is written to the buffer.
-	writer.Flush()
+	if err := writer.Flush(); err != nil {
+		log.Warnf("Failed to flush summary table writer: %v", err)
+	}
 	log.Infof("\n\nBulk Patch Summary:\n%s", buf.String())
 }
