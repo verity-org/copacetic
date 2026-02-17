@@ -29,7 +29,7 @@ type ImageSpec struct {
 
 // TargetSpec defines how the patched image should be tagged and where it should be pushed.
 type TargetSpec struct {
-	Registry string `yaml:"registry,omitempty"` // Target registry (e.g., "ghcr.io/myorg/myimage")
+	Registry string `yaml:"registry,omitempty"` // Target registry/namespace prefix (e.g., "ghcr.io/myorg")
 	Tag      string `yaml:"tag,omitempty"`      // Tag template (defaults to "{{ .SourceTag }}-patched")
 }
 

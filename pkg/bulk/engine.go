@@ -192,7 +192,7 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 
 				// Evaluate whether patching is needed and resolve the final tag
 				// Use targetRepo for skip detection (queries the registry where patched images are pushed)
-				action := evaluatePatchAction(targetRepo, targetTag, opts.Scanner, opts.Force, reports)
+				action := evaluatePatchAction(targetRepo, targetTag, opts.Scanner, opts.Force, reports, opts.PkgTypes, opts.LibraryPatchLevel)
 				if action.ShouldSkip {
 					// Record as skipped
 					mu.Lock()
@@ -231,7 +231,7 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 				jobResult := patchJobStatus{
 					Name:   spec.Name,
 					Source: imageWithTag,
-					Target: targetTag,
+					Target: patchedImageRef,
 				}
 				if err != nil {
 					jobResult.Status = "Failed"

@@ -191,9 +191,9 @@ func (idx *reportIndex) lookup(imageRef string) (string, bool) {
 // Returns (hasVulns, error) where:
 // - hasVulns=true means fixable vulnerabilities were found.
 // - error is set if the report couldn't be parsed.
-var checkReportForVulnerabilities = func(reportPath, scanner string) (bool, error) {
+var checkReportForVulnerabilities = func(reportPath, scanner, pkgTypes, libraryPatchLevel string) (bool, error) {
 	// Use existing report parsing from pkg/report
-	updateManifest, err := report.TryParseScanReport(reportPath, scanner, "os", "patch")
+	updateManifest, err := report.TryParseScanReport(reportPath, scanner, pkgTypes, libraryPatchLevel)
 	if err != nil {
 		return false, fmt.Errorf("failed to parse report: %w", err)
 	}
@@ -204,7 +204,7 @@ var checkReportForVulnerabilities = func(reportPath, scanner string) (bool, erro
 }
 
 // evaluatePatchAction orchestrates the full workflow: discover existing tags, check report if needed, and decide whether to patch.
-func evaluatePatchAction(repo, baseTag, scanner string, force bool, reports *reportIndex) skipCheckResult {
+func evaluatePatchAction(repo, baseTag, scanner string, force bool, reports *reportIndex, pkgTypes, libraryPatchLevel string) skipCheckResult {
 	// Discover existing patched tags
 	existingTags, err := discoverExistingPatchTags(repo, baseTag)
 	if err != nil {
@@ -262,7 +262,7 @@ func evaluatePatchAction(repo, baseTag, scanner string, force bool, reports *rep
 	}
 
 	log.Debugf("Checking vulnerability report '%s' for image '%s'", reportPath, imageRef)
-	hasVulns, err := checkReportForVulnerabilities(reportPath, scanner)
+	hasVulns, err := checkReportForVulnerabilities(reportPath, scanner, pkgTypes, libraryPatchLevel)
 	if err != nil {
 		// Fail-open: if report parsing fails, proceed with patching
 		log.Warnf("Failed to parse report '%s': %v. Proceeding with patch (fail-open).", reportPath, err)
