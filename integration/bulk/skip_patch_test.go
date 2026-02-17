@@ -61,9 +61,21 @@ func TestSkipAlreadyPatchedImages(t *testing.T) {
 	assert.Contains(t, tags, "3.19.1-skip-test", "base patched tag should exist after first run")
 	t.Log("✓ Base patched tag created successfully")
 
+	// Scan the patched image to generate a report
+	reportsDir := filepath.Join(tmpDir, "reports")
+	err = os.MkdirAll(reportsDir, 0o755)
+	require.NoError(t, err, "failed to create reports directory")
+
+	patchedImage := fmt.Sprintf("%s:3.19.1-skip-test", localAlpineRepo)
+	reportPath := filepath.Join(reportsDir, "alpine-patched.json")
+	scanCmd := exec.Command("trivy", "image", "--format", "json", "--output", reportPath, "--scanners", "vuln", patchedImage)
+	scanOutput, err := scanCmd.CombinedOutput()
+	require.NoError(t, err, "trivy scan failed with output:\n%s", string(scanOutput))
+	t.Logf("Generated vulnerability report at %s", reportPath)
+
 	// Second run: should skip (no new vulnerabilities)
 	t.Log("=== Second run: should skip patching ===")
-	cmd = exec.Command(copaPath, "patch", "--config", configPath, "--debug", "--push")
+	cmd = exec.Command(copaPath, "patch", "--config", configPath, "--debug", "--push", "--patched-reports-dir", reportsDir)
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "copa command failed on second run with output:\n%s", string(output))
 	t.Logf("Second run output: %s", string(output))
@@ -81,7 +93,7 @@ func TestSkipAlreadyPatchedImages(t *testing.T) {
 
 	// Third run: with --force flag (should create versioned tag)
 	t.Log("=== Third run: with --force flag ===")
-	cmd = exec.Command(copaPath, "patch", "--config", configPath, "--debug", "--push", "--force")
+	cmd = exec.Command(copaPath, "patch", "--config", configPath, "--debug", "--push", "--force", "--patched-reports-dir", reportsDir)
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "copa command failed on third run with output:\n%s", string(output))
 	t.Logf("Third run output: %s", string(output))
@@ -93,7 +105,7 @@ func TestSkipAlreadyPatchedImages(t *testing.T) {
 
 	// Fourth run: with --force again (should create another versioned tag)
 	t.Log("=== Fourth run: with --force again ===")
-	cmd = exec.Command(copaPath, "patch", "--config", configPath, "--debug", "--push", "--force")
+	cmd = exec.Command(copaPath, "patch", "--config", configPath, "--debug", "--push", "--force", "--patched-reports-dir", reportsDir)
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "copa command failed on fourth run with output:\n%s", string(output))
 	t.Logf("Fourth run output: %s", string(output))
