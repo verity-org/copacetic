@@ -88,7 +88,7 @@ func TestMergeTarget(t *testing.T) {
 		expected     TargetSpec
 	}{
 		{
-			name: "both empty",
+			name:         "both empty",
 			globalTarget: TargetSpec{},
 			imageTarget:  TargetSpec{},
 			expected:     TargetSpec{},
