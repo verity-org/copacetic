@@ -21,17 +21,20 @@ Top‑level fields:
 apiVersion: copa.sh/v1alpha1
 kind: PatchConfig
 
+# Optional: global default target for all images
+target:
+  registry: "ghcr.io/myorg"           # Target registry for patched images
+  tag: "{{ .SourceTag }}-patched"     # Tag template (default if omitted)
+
 images:
   - name: "nginx"
-    image: "docker.io/library/nginx"
+    image: "docker.io/library/nginx"  # Source registry
     tags:
       strategy: "pattern"              # pattern | latest | list
       pattern: "^1\\.2[0-9]\\.[0-9]+$"
       maxTags: 3                        # optional cap
       exclude: ["1.20.0", "1.20.1"]   # optional skip list
-    target:
-      # Defaults to {{ .SourceTag }}-patched if omitted
-      tag: "{{ .SourceTag }}-patched"
+    # Inherits global target (or override per-image)
 
   - name: "python"
     image: "docker.io/library/python"
@@ -40,6 +43,10 @@ images:
       list: ["3.9.18", "3.10.13", "3.11.7"]
     # Optional per-image platform filter for multi-arch
     platforms: ["linux/amd64", "linux/arm64"]
+    # Optional: override global target for this image
+    target:
+      registry: "quay.io/special/python"
+      tag: "{{ .SourceTag }}-fixed"
 
   - name: "alpine"
     image: "docker.io/library/alpine"
@@ -138,6 +145,34 @@ reports/
 ```
 
 **How it works:** Copa reads the `ArtifactName` field from inside each report JSON file to match reports to images. You can name your report files anything you want—Copa doesn't rely on filenames.
+
+**Cross-registry workflows:** If you patch images from one registry (e.g., `quay.io/opstree/redis`) but push patched images to a different registry (e.g., `ghcr.io/myorg/redis`), specify the target registry in your config using `target.registry`.
+
+Copa automatically extracts the image name from the source and appends it to the target registry:
+- Source: `quay.io/opstree/redis` + Target: `ghcr.io/myorg` → Patched image: `ghcr.io/myorg/redis`
+- Source: `docker.io/library/nginx` + Target: `ghcr.io/myorg` → Patched image: `ghcr.io/myorg/nginx`
+
+```yaml
+apiVersion: copa.sh/v1alpha1
+kind: PatchConfig
+
+# Global target: all patched images go to ghcr.io/myorg
+target:
+  registry: "ghcr.io/myorg"
+
+images:
+  - name: "redis"
+    image: "quay.io/opstree/redis"  # Source: quay.io/opstree/redis
+    tags:
+      strategy: "list"
+      list: ["v8.2.1"]
+    # Result: patched image pushed to ghcr.io/myorg/redis:v8.2.1-patched
+```
+
+This ensures:
+- Copa queries `ghcr.io/myorg/redis` for existing patched tags (not the source registry)
+- Reports with `ArtifactName: "ghcr.io/myorg/redis:v8.2.1-patched"` match correctly
+- Patched images are pushed to the target registry with the correct image name
 
 **Complete workflow:**
 ```bash

@@ -49,6 +49,23 @@ trivy image registry.io/nginx:1.25.3-patched -f json -o reports/nginx-patched.js
 copa patch --config bulk.yaml --push --patched-reports-dir ./reports
 ```
 
+**Cross-Registry Workflows**
+- If you patch images from one registry and push to a different registry, specify `target.registry` in your config
+- Example: Source image from `quay.io/opstree/redis:v8.2.1`, patched image pushed to `ghcr.io/myorg/redis:v8.2.1-patched`
+- Configuration:
+```yaml
+target:
+  registry: "ghcr.io/myorg"  # Target registry for patched images
+
+images:
+  - name: "redis"
+    image: "quay.io/opstree/redis"  # Source registry
+    tags:
+      strategy: "list"
+      list: ["v8.2.1"]
+```
+- With `target.registry` set, Copa queries the correct registry for existing patched tags and matches reports correctly
+
 ## Getting `downloaded package ... version ... lower than required ... for update` error when trying to patch an image
 
 This error means that the package manager is trying to install a version of the package that is lower than the version that was required from the scanner report. This can happen for a few reasons:

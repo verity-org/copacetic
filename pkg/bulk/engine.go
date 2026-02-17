@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"text/template"
 
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/hashicorp/go-multierror"
 	"github.com/project-copacetic/copacetic/pkg/patch"
 	"github.com/project-copacetic/copacetic/pkg/types"
@@ -27,6 +28,48 @@ type patchJobStatus struct {
 	Status  string
 	Error   error
 	Details string
+}
+
+// mergeTarget merges top-level target configuration with image-level target.
+// Image-level settings take precedence over top-level defaults.
+func mergeTarget(globalTarget, imageTarget TargetSpec) TargetSpec {
+	result := globalTarget // Start with global defaults
+
+	// Override with image-level settings if provided
+	if imageTarget.Registry != "" {
+		result.Registry = imageTarget.Registry
+	}
+	if imageTarget.Tag != "" {
+		result.Tag = imageTarget.Tag
+	}
+
+	return result
+}
+
+// buildTargetRepository constructs the target repository path by combining
+// the target registry with the image name from the source image.
+// Examples:
+//   - sourceImage: "quay.io/opstree/redis", targetRegistry: "ghcr.io/myorg" → "ghcr.io/myorg/redis"
+//   - sourceImage: "docker.io/library/nginx", targetRegistry: "ghcr.io/myorg" → "ghcr.io/myorg/nginx"
+//   - sourceImage: "redis", targetRegistry: "ghcr.io/myorg" → "ghcr.io/myorg/redis"
+func buildTargetRepository(sourceImage, targetRegistry string) (string, error) {
+	if targetRegistry == "" {
+		return sourceImage, nil
+	}
+
+	// Parse the source image to extract the image name
+	ref, err := name.ParseReference(sourceImage)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse source image '%s': %w", sourceImage, err)
+	}
+
+	// Extract the image name (last segment of the repository path)
+	repoStr := ref.Context().RepositoryStr()
+	repoParts := strings.Split(repoStr, "/")
+	imageName := repoParts[len(repoParts)-1]
+
+	// Combine target registry with image name
+	return fmt.Sprintf("%s/%s", strings.TrimSuffix(targetRegistry, "/"), imageName), nil
 }
 
 // PatchFromConfig orchestrates the bulk patching process based on a configuration file.
@@ -109,8 +152,29 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 				spec := j.spec
 				tag := j.tag
 				imageWithTag := fmt.Sprintf("%s:%s", spec.Image, tag)
+
+				// Merge global target config with image-level target config
+				effectiveTarget := mergeTarget(config.Target, spec.Target)
+
+				// Build the target repository (registry + image name)
+				targetRepo, err := buildTargetRepository(spec.Image, effectiveTarget.Registry)
+				if err != nil {
+					errMessage := fmt.Errorf("worker %d: error building target repository for '%s': %w", workerID, spec.Name, err)
+					mu.Lock()
+					results = append(results, patchJobStatus{
+						Name:   spec.Name,
+						Source: imageWithTag,
+						Target: "N/A",
+						Status: "Error",
+						Error:  errMessage,
+					})
+					mu.Unlock()
+					errChan <- errMessage
+					continue
+				}
+
 				// Resolve the target tag for the patched image.
-				targetTag, err := resolveTargetTag(spec.Target, tag)
+				targetTag, err := resolveTargetTag(effectiveTarget, tag)
 				if err != nil {
 					errMessage := fmt.Errorf("worker %d: error resolving target tag for '%s:%s': %w", workerID, spec.Name, tag, err)
 					mu.Lock()
@@ -127,7 +191,8 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 				}
 
 				// Evaluate whether patching is needed and resolve the final tag
-				action := evaluatePatchAction(spec.Image, targetTag, opts.Scanner, opts.Force, reports)
+				// Use targetRepo for skip detection (queries the registry where patched images are pushed)
+				action := evaluatePatchAction(targetRepo, targetTag, opts.Scanner, opts.Force, reports)
 				if action.ShouldSkip {
 					// Record as skipped
 					mu.Lock()
@@ -151,9 +216,12 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 
 				log.Debugf("[Worker %d] --> Starting patch for %s with tag %s", workerID, imageWithTag, finalTag)
 
+				// Build the full patched image reference using target repository
+				patchedImageRef := fmt.Sprintf("%s:%s", targetRepo, finalTag)
+
 				jobOpts := *opts // Shallow copy of the global options
 				jobOpts.Image = imageWithTag
-				jobOpts.PatchedTag = finalTag
+				jobOpts.PatchedTag = patchedImageRef
 				jobOpts.Platforms = spec.Platforms
 				jobOpts.Suffix = ""
 
