@@ -130,7 +130,7 @@ func buildReportIndex(reportsDir string) *reportIndex {
 		filePath := filepath.Join(reportsDir, entry.Name())
 
 		// Read the file and extract ArtifactName
-		data, err := os.ReadFile(filePath)
+		data, err := os.ReadFile(filePath) // #nosec G304 - filePath is from controlled directory scan
 		if err != nil {
 			log.Debugf("Failed to read report file '%s': %v", filePath, err)
 			continue
