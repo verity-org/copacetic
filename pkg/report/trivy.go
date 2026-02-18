@@ -511,5 +511,13 @@ func (t *TrivyParser) ParseWithLibraryPatchLevel(file, libraryPatchLevel string)
 		}
 	}
 
+	// Sort LangUpdates by package name for deterministic output
+	sort.Slice(updates.LangUpdates, func(i, j int) bool {
+		if updates.LangUpdates[i].Name != updates.LangUpdates[j].Name {
+			return updates.LangUpdates[i].Name < updates.LangUpdates[j].Name
+		}
+		return updates.LangUpdates[i].VulnerabilityID < updates.LangUpdates[j].VulnerabilityID
+	})
+
 	return &updates, nil
 }

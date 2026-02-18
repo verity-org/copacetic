@@ -116,6 +116,20 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 				return errors.New("either --config or --image must be provided")
 			}
 
+			// Validate bulk-only flags are not used in single-image mode
+			if ua.configFile == "" {
+				var bulkOnlyErrors []string
+				if ua.force {
+					bulkOnlyErrors = append(bulkOnlyErrors, "--force")
+				}
+				if ua.patchedReportsDir != "" {
+					bulkOnlyErrors = append(bulkOnlyErrors, "--patched-reports-dir")
+				}
+				if len(bulkOnlyErrors) > 0 {
+					return fmt.Errorf("%s can only be used with --config (bulk mode)", strings.Join(bulkOnlyErrors, " and "))
+				}
+			}
+
 			// bulk patch
 			if ua.configFile != "" {
 				if ua.appImage != "" || ua.report != "" || ua.patchedTag != "" {
