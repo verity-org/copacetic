@@ -107,8 +107,9 @@ type reportIndex struct {
 	refs map[string]string // normalized ref → file path
 }
 
-// buildReportIndex scans a directory for JSON report files, extracts ArtifactName
+// buildReportIndex scans a flat directory for JSON report files, extracts ArtifactName
 // from each, normalizes references, and builds a lookup map.
+// Note: Only top-level JSON files are indexed; subdirectories are not scanned recursively.
 func buildReportIndex(reportsDir string) *reportIndex {
 	idx := &reportIndex{
 		refs: make(map[string]string),
@@ -123,7 +124,11 @@ func buildReportIndex(reportsDir string) *reportIndex {
 
 	// Process each JSON file
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+		if entry.IsDir() {
+			log.Debugf("Skipping subdirectory '%s' in reports directory (only top-level JSON files are indexed)", entry.Name())
+			continue
+		}
+		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
 

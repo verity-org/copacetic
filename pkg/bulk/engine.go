@@ -47,7 +47,12 @@ func mergeTarget(globalTarget, imageTarget TargetSpec) TargetSpec {
 }
 
 // buildTargetRepository constructs the target repository path by combining
-// the target registry with the image name from the source image.
+// the target registry with the image name (last path segment) from the source image.
+//
+// Note: Only the last path segment is preserved. Images with the same name but
+// different namespaces (e.g., "team-a/redis" and "team-b/redis") would both map
+// to "<target>/redis". Use per-image target overrides in the config to avoid collisions.
+//
 // Examples:
 //   - sourceImage: "quay.io/opstree/redis", targetRegistry: "ghcr.io/myorg" → "ghcr.io/myorg/redis"
 //   - sourceImage: "docker.io/library/nginx", targetRegistry: "ghcr.io/myorg" → "ghcr.io/myorg/nginx"
@@ -199,7 +204,7 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 					results = append(results, patchJobStatus{
 						Name:    spec.Name,
 						Source:  imageWithTag,
-						Target:  action.ResolvedTag,
+						Target:  fmt.Sprintf("%s:%s", targetRepo, action.ResolvedTag),
 						Status:  "Skipped",
 						Details: action.Reason,
 					})
