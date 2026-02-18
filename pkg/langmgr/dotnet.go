@@ -598,7 +598,9 @@ echo "Verifying updates in $UPDATED_DEPS:"
 
 	for _, update := range updates {
 		if update.FixedVersion != "" {
-			fmt.Fprintf(&script, "grep -o '\"%s/%s\"' \"$UPDATED_DEPS\" | head -1 && echo \"  %s/%s found\" || echo \"  WARNING: %s/%s not found\"\n", update.Name, update.FixedVersion, update.Name, update.FixedVersion, update.Name, update.FixedVersion)
+			fmt.Fprintf(&script,
+				"grep -o '\"%s/%s\"' \"$UPDATED_DEPS\" | head -1 && echo \"  %s/%s found\" || echo \"  WARNING: %s/%s not found\"\n",
+				update.Name, update.FixedVersion, update.Name, update.FixedVersion, update.Name, update.FixedVersion)
 		}
 	}
 
