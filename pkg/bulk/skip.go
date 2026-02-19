@@ -209,7 +209,7 @@ var checkReportForVulnerabilities = func(reportPath, scanner, pkgTypes, libraryP
 }
 
 // evaluatePatchAction orchestrates the full workflow: discover existing tags, check report if needed, and decide whether to patch.
-func evaluatePatchAction(repo, baseTag, scanner string, force bool, reports *reportIndex, pkgTypes, libraryPatchLevel string) skipCheckResult {
+func evaluatePatchAction(repo, baseTag, scanner string, reports *reportIndex, pkgTypes, libraryPatchLevel string) skipCheckResult {
 	// Discover existing patched tags
 	existingTags, err := discoverExistingPatchTags(repo, baseTag)
 	if err != nil {
@@ -232,15 +232,6 @@ func evaluatePatchAction(repo, baseTag, scanner string, force bool, reports *rep
 
 	// Compute the next version tag
 	nextTag := nextPatchTag(baseTag, existingTags)
-
-	// If --force is set, always patch with the next version
-	if force {
-		log.Debugf("Force flag set, re-patching '%s' with tag '%s'", repo, nextTag)
-		return skipCheckResult{
-			ShouldSkip:  false,
-			ResolvedTag: nextTag,
-		}
-	}
 
 	// If no reports index provided, fail-open and proceed to patch
 	if reports == nil {

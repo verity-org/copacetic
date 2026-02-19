@@ -23,7 +23,6 @@ var skipConfigTemplate string
 // It verifies that:
 // 1. Images are patched on the first run.
 // 2. Images are skipped on the second run (no vulnerabilities).
-// 3. Images are re-patched with --force flag (version-bumped tags).
 func TestSkipAlreadyPatchedImages(t *testing.T) {
 	t.Setenv("GODEBUG", "netdns=go+netgo")
 	ctx := context.Background()
@@ -75,7 +74,7 @@ func TestSkipAlreadyPatchedImages(t *testing.T) {
 
 	// Second run: should skip (no new vulnerabilities)
 	t.Log("=== Second run: should skip patching ===")
-	cmd = exec.Command(copaPath, "patch", "--config", configPath, "--debug", "--push", "--patched-reports-dir", reportsDir)
+	cmd = exec.Command(copaPath, "patch", "--config", configPath, "--debug", "--push", "-r", reportsDir)
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, "copa command failed on second run with output:\n%s", string(output))
 	t.Logf("Second run output: %s", string(output))
@@ -91,39 +90,13 @@ func TestSkipAlreadyPatchedImages(t *testing.T) {
 	assert.Equal(t, tags, tagsAfterSkip, "no new tags should be created when skipping")
 	t.Log("✓ No new tags created during skip")
 
-	// Third run: with --force flag (should create versioned tag)
-	t.Log("=== Third run: with --force flag ===")
-	cmd = exec.Command(copaPath, "patch", "--config", configPath, "--debug", "--push", "--force", "--patched-reports-dir", reportsDir)
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "copa command failed on third run with output:\n%s", string(output))
-	t.Logf("Third run output: %s", string(output))
-
-	// Verify the versioned tag was created
-	tagsAfterForce := listRepoTags(t, registryHost, "library/alpine")
-	assert.Contains(t, tagsAfterForce, "3.19.1-skip-test-1", "versioned tag should exist after force run")
-	t.Log("✓ Versioned tag created with --force flag")
-
-	// Fourth run: with --force again (should create another versioned tag)
-	t.Log("=== Fourth run: with --force again ===")
-	cmd = exec.Command(copaPath, "patch", "--config", configPath, "--debug", "--push", "--force", "--patched-reports-dir", reportsDir)
-	output, err = cmd.CombinedOutput()
-	require.NoError(t, err, "copa command failed on fourth run with output:\n%s", string(output))
-	t.Logf("Fourth run output: %s", string(output))
-
-	// Verify the next versioned tag was created
-	tagsAfterSecondForce := listRepoTags(t, registryHost, "library/alpine")
-	assert.Contains(t, tagsAfterSecondForce, "3.19.1-skip-test-2", "next versioned tag should exist after second force run")
-	t.Log("✓ Second versioned tag created successfully")
-
 	// Verify all expected tags exist
 	expectedTags := []string{
-		"3.19.1",             // original
-		"3.19.1-skip-test",   // first patch
-		"3.19.1-skip-test-1", // first force
-		"3.19.1-skip-test-2", // second force
+		"3.19.1",           // original
+		"3.19.1-skip-test", // first patch
 	}
 	for _, expectedTag := range expectedTags {
-		assert.Contains(t, tagsAfterSecondForce, expectedTag, "expected tag %s should exist", expectedTag)
+		assert.Contains(t, tagsAfterSkip, expectedTag, "expected tag %s should exist", expectedTag)
 	}
 	t.Logf("✓ All %d expected tags verified", len(expectedTags))
 }

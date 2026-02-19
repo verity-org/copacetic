@@ -129,8 +129,8 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 
 	// Build report index once before workers start
 	var reports *reportIndex
-	if opts.PatchedReportsDir != "" {
-		reports = buildReportIndex(opts.PatchedReportsDir)
+	if opts.Report != "" {
+		reports = buildReportIndex(opts.Report)
 	}
 
 	numWorkers := runtime.NumCPU()
@@ -197,7 +197,7 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 
 				// Evaluate whether patching is needed and resolve the final tag
 				// Use targetRepo for skip detection (queries the registry where patched images are pushed)
-				action := evaluatePatchAction(targetRepo, targetTag, opts.Scanner, opts.Force, reports, opts.PkgTypes, opts.LibraryPatchLevel)
+				action := evaluatePatchAction(targetRepo, targetTag, opts.Scanner, reports, opts.PkgTypes, opts.LibraryPatchLevel)
 				if action.ShouldSkip {
 					// Record as skipped
 					mu.Lock()

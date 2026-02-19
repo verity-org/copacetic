@@ -36,7 +36,6 @@ type patchArgs struct {
 	timeout           time.Duration
 	scanner           string
 	ignoreError       bool
-	force             bool
 	format            string
 	output            string
 	bkOpts            buildkit.Opts
@@ -49,8 +48,7 @@ type patchArgs struct {
 	ociDir            string
 	eolAPIBaseURL     string
 	exitOnEOL         bool
-	configFile        string
-	patchedReportsDir string
+	configFile string
 }
 
 func NewPatchCmd() *cobra.Command {
@@ -92,7 +90,6 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 				Timeout:           ua.timeout,
 				Scanner:           ua.scanner,
 				IgnoreError:       ua.ignoreError,
-				Force:             ua.force,
 				Format:            ua.format,
 				Output:            ua.output,
 				BkAddr:            ua.bkOpts.Addr,
@@ -109,31 +106,16 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 				EOLAPIBaseURL:     ua.eolAPIBaseURL,
 				ExitOnEOL:         ua.exitOnEOL,
 				ConfigFile:        ua.configFile,
-				PatchedReportsDir: ua.patchedReportsDir,
 			}
 
 			if ua.configFile == "" && ua.appImage == "" {
 				return errors.New("either --config or --image must be provided")
 			}
 
-			// Validate bulk-only flags are not used in single-image mode
-			if ua.configFile == "" {
-				var bulkOnlyErrors []string
-				if ua.force {
-					bulkOnlyErrors = append(bulkOnlyErrors, "--force")
-				}
-				if ua.patchedReportsDir != "" {
-					bulkOnlyErrors = append(bulkOnlyErrors, "--patched-reports-dir")
-				}
-				if len(bulkOnlyErrors) > 0 {
-					return fmt.Errorf("%s can only be used with --config (bulk mode)", strings.Join(bulkOnlyErrors, " and "))
-				}
-			}
-
 			// bulk patch
 			if ua.configFile != "" {
-				if ua.appImage != "" || ua.report != "" || ua.patchedTag != "" {
-					return errors.New("--config cannot be used with --image, --report, or --tag")
+				if ua.appImage != "" || ua.patchedTag != "" {
+					return errors.New("--config cannot be used with --image or --tag")
 				}
 
 				log.Info("Starting in bulk image patching mode...")
@@ -148,10 +130,9 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 		},
 	}
 	flags := patchCmd.Flags()
-	flags.StringVar(&ua.configFile, "config", "", "Path to a bulk patch YAML config file (Comprehensive update only). Cannot be used with --image, --report, or --tag.")
-	flags.StringVar(&ua.patchedReportsDir, "patched-reports-dir", "", "Directory containing vulnerability reports for patched images (for skip detection in bulk mode with --config)")
+	flags.StringVar(&ua.configFile, "config", "", "Path to a bulk patch YAML config file (Comprehensive update only). Cannot be used with --image or --tag.")
 	flags.StringVarP(&ua.appImage, "image", "i", "", "Application image name and tag to patch")
-	flags.StringVarP(&ua.report, "report", "r", "", "Vulnerability report file or directory path")
+	flags.StringVarP(&ua.report, "report", "r", "", "Vulnerability report file (single-image mode) or directory of reports for patched images (bulk mode)")
 	flags.StringVarP(&ua.patchedTag, "tag", "t", "", "Tag for the patched image")
 	flags.StringVarP(&ua.suffix, "tag-suffix", "", "patched",
 		"Suffix for the patched image (if no explicit --tag provided)")
@@ -164,7 +145,6 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 	flags.DurationVar(&ua.timeout, "timeout", 5*time.Minute, "Timeout for the operation, defaults to '5m'")
 	flags.StringVarP(&ua.scanner, "scanner", "s", "trivy", "Scanner used to generate the report, defaults to 'trivy'")
 	flags.BoolVar(&ua.ignoreError, "ignore-errors", false, "Ignore errors and continue patching (for single-platform: continue with other packages; for multi-platform: continue with other platforms)")
-	flags.BoolVar(&ua.force, "force", false, "Force re-patching even if the patched image has no fixable vulnerabilities (bulk mode with --config only)")
 	flags.StringVarP(&ua.format, "format", "f", "openvex", "Output format, defaults to 'openvex'")
 	flags.StringVarP(&ua.output, "output", "o", "", "Output file path")
 	flags.BoolVarP(&ua.push, "push", "p", false, "Push patched image to destination registry")
