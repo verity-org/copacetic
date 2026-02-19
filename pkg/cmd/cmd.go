@@ -48,7 +48,7 @@ type patchArgs struct {
 	ociDir            string
 	eolAPIBaseURL     string
 	exitOnEOL         bool
-	configFile string
+	configFile        string
 }
 
 func NewPatchCmd() *cobra.Command {
