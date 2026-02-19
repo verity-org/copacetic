@@ -13,7 +13,7 @@ The first approach you could take is incrementing a number you append to the end
 With this pattern you are always explicitly aware of the patch state of the image you are using. The downside is that dependabot is currently unable bump to patched images from unmodified images or bump from one patched image to the next.
 
 :::tip Bulk Patching Automatic Versioning
-When using [bulk image patching](./bulk-image-patching.md#skip-already-patched-images) with `--push` and `--patched-reports-dir`, Copa automatically implements this pattern. It checks vulnerability reports for existing patched images and only creates new versioned tags when re-patching is needed, saving time and compute in scheduled workflows.
+When using [bulk image patching](./bulk-image-patching.md#skip-already-patched-images) with `--push` and `-r`, Copa automatically implements this pattern. It checks vulnerability reports for existing patched images and only creates new versioned tags when re-patching is needed, saving time and compute in scheduled workflows.
 :::
 
 ### Dynamic Tags
