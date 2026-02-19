@@ -92,15 +92,14 @@ copa patch --config ./copa-bulk-config.yaml --oci-dir ./out
 | ----------------------- | ------------------------------------------------------------------------ |
 | `--config`              | Path to PatchConfig YAML. Enables bulk mode.                             |
 | `--push`                | Push patched images and (if multi‑arch) the manifest list to the registry|
-| `--patched-reports-dir` | Directory containing vulnerability reports for patched images (for skip detection) |
+| `-r`, `--report`        | Directory containing vulnerability reports for patched images (for skip detection) |
 | `--timeout`             | Per‑job timeout (e.g., `15m`)                                            |
 | `--ignore-errors`       | Continue processing other jobs if one fails                           |
-| `--force`               | Force re-patching even if vulnerability reports show no fixable vulnerabilities |
 | `--oci-dir`             | Export patched image(s) as an OCI layout instead of pushing              |
 
 Restrictions in bulk mode:
 
-- `--config` cannot be combined with `--image`, `--report`, or `--tag`.
+- `--config` cannot be combined with `--image` or `--tag`.
 - Global flags like `--push`, `--timeout`, `--ignore-errors`, and `--oci-dir` apply to every job defined by the config.
 
 ## Behavior and Output
@@ -120,7 +119,7 @@ This skip feature uses vulnerability reports to decide **whether** to re-patch, 
 
 ### How It Works
 
-When you run `copa patch --config` with `--push` and `--patched-reports-dir`:
+When you run `copa patch --config` with `--push` and `-r`:
 
 1. **First run**: Images are patched from the original source (e.g., `nginx:1.25.3`) and pushed with the base tag (e.g., `1.25.3-patched`)
 2. **Scan patched images**: Run your scanner (Trivy, etc.) on patched images and save reports to a directory
@@ -128,13 +127,12 @@ When you run `copa patch --config` with `--push` and `--patched-reports-dir`:
    - If report shows no fixable vulnerabilities → skips patching (status: "Skipped")
    - If report shows fixable vulnerabilities → re-patches **from the original source image** with version-bumped tag
    - If report not found → proceeds with patching (fail-open behavior)
-4. **Force re-patch**: Use `--force` to bypass report checks and always re-patch
 
 **Important**: Re-patches are always created from the original source image (not the previous patched image), ensuring comprehensive updates and preventing layer buildup. The skip feature saves time by avoiding this re-work when no new vulnerabilities are present.
 
 ### Report Directory Setup
 
-Copa uses vulnerability reports to determine if patching is needed. You provide reports via the `--patched-reports-dir` flag.
+Copa uses vulnerability reports to determine if patching is needed. You provide reports via the `-r` flag.
 
 **Directory structure:**
 ```
@@ -185,7 +183,7 @@ trivy image registry.io/nginx:1.25.3-patched -f json -o reports/nginx-patched.js
 trivy image registry.io/alpine:3.19-patched -f json -o reports/alpine-patched.json
 
 # 3. Run bulk patch with skip detection
-copa patch --config bulk.yaml --push --patched-reports-dir ./reports
+copa patch --config bulk.yaml --push -r ./reports
 # Skips images with clean reports, re-patches images with vulnerabilities
 ```
 
@@ -224,7 +222,7 @@ ubuntu-test        Patched   registry/ubuntu:22.04   22.04-patched-3    OK
 If Copa cannot determine whether to skip (e.g., report not found, parse errors, registry errors), it defaults to patching. This ensures scheduled jobs don't fail silently.
 
 **Fail-open scenarios:**
-- `--patched-reports-dir` not provided → always patches
+- `-r` not provided → always patches
 - Report file not found → proceeds with patching
 - Report parsing fails → proceeds with patching, logs warning
 - Registry tag listing fails → proceeds with patching
@@ -244,28 +242,18 @@ trivy image registry.io/nginx:1.25.3-patched -f json -o reports/nginx.json
 # ... scan other patched images ...
 
 # Subsequent runs: skip images with clean reports
-copa patch --config ./copa-bulk-config.yaml --push --patched-reports-dir ./reports
+copa patch --config ./copa-bulk-config.yaml --push -r ./reports
 ```
 
 On subsequent runs with reports, Copa automatically skips images that have no new vulnerabilities.
 
 ### Without skip detection
 
-If you don't provide `--patched-reports-dir`, Copa patches all images on every run:
+If you don't provide `-r`, Copa patches all images on every run:
 
 ```bash
 copa patch --config ./copa-bulk-config.yaml --push --timeout 20m
 ```
-
-### Force re-patch
-
-Force re-patching of all images regardless of vulnerability status:
-
-```bash
-copa patch --config ./copa-bulk-config.yaml --push --patched-reports-dir ./reports --force
-```
-
-This creates version-bumped tags (e.g., `1.25.3-patched-1`) even when reports show no new vulnerabilities.
 
 ### Keep base images fresh
 

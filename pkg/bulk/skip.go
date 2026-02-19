@@ -77,7 +77,7 @@ func extractVersionNumber(tag, baseTag string) int {
 }
 
 // latestPatchTag returns the tag with the highest version number from the list.
-func latestPatchTag(tags []string, baseTag string) string {
+func latestPatchTag(tags []string) string {
 	if len(tags) == 0 {
 		return ""
 	}
@@ -243,7 +243,7 @@ func evaluatePatchAction(repo, baseTag, scanner string, reports *reportIndex, pk
 	}
 
 	// Get the latest existing tag to check
-	latestTag := latestPatchTag(existingTags, baseTag)
+	latestTag := latestPatchTag(existingTags)
 	imageRef := fmt.Sprintf("%s:%s", repo, latestTag)
 
 	// Look up the report using the index

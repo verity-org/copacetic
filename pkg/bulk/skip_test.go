@@ -138,7 +138,7 @@ func TestLatestPatchTag(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := latestPatchTag(tt.tags, tt.baseTag)
+			result := latestPatchTag(tt.tags)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -525,7 +525,7 @@ func TestEvaluatePatchAction(t *testing.T) {
 				assert.False(t, checkCalled, "Report check should not have been called")
 			} else {
 				// Check was called only if report was found
-				latestTag := latestPatchTag(tt.existingTags, tt.baseTag)
+				latestTag := latestPatchTag(tt.existingTags)
 				imageRef := fmt.Sprintf("%s:%s", tt.repo, latestTag)
 				_, found := tt.reports.lookup(imageRef)
 				assert.Equal(t, found, checkCalled, "Report check call mismatch")

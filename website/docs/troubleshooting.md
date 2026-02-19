@@ -4,10 +4,10 @@ title: Troubleshooting
 
 ## Bulk Patching: Images Not Being Skipped
 
-When using [bulk image patching](./bulk-image-patching.md) with `--push` and `--patched-reports-dir`, Copa checks vulnerability reports to avoid unnecessary re-patching. If images are not being skipped as expected:
+When using [bulk image patching](./bulk-image-patching.md) with `--push` and `-r`, Copa checks vulnerability reports to avoid unnecessary re-patching. If images are not being skipped as expected:
 
 **Check Reports Directory**
-- The skip feature requires the `--patched-reports-dir` flag
+- The skip feature requires the `-r` flag
 - Without this flag, Copa will always patch (no skip detection)
 - Verify the directory path is correct and accessible
 
@@ -27,10 +27,6 @@ When using [bulk image patching](./bulk-image-patching.md) with `--push` and `--
 - Supported scanners: `trivy`, `native`, custom plugins
 - The scanner must match the format of your report files
 
-**Force Re-patching**
-- Use `--force` flag to bypass report checks and always create new versioned tags
-- Example: `copa patch --config bulk.yaml --push --patched-reports-dir ./reports --force`
-
 **Registry Access**
 - Skip detection queries the registry for existing patched tags
 - Ensure Copa has read access to the target registry
@@ -46,7 +42,7 @@ copa patch --config bulk.yaml --push
 trivy image registry.io/nginx:1.25.3-patched -f json -o reports/nginx-patched.json
 
 # 3. Run with skip detection
-copa patch --config bulk.yaml --push --patched-reports-dir ./reports
+copa patch --config bulk.yaml --push -r ./reports
 ```
 
 **Cross-Registry Workflows**

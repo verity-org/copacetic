@@ -113,7 +113,7 @@ Yes, see [best practices](best-practices.md#dependabot) to learn more about usin
 
 ## Why is bulk patching creating versioned tags like `1.25.3-patched-1`?
 
-When using [bulk image patching](./bulk-image-patching.md) with `--push`, Copa automatically avoids re-patching images that have no new vulnerabilities. When a re-patch is needed (either due to new vulnerabilities or using `--force`), Copa creates version-suffixed tags since registry tags are immutable:
+When using [bulk image patching](./bulk-image-patching.md) with `--push`, Copa automatically avoids re-patching images that have no new vulnerabilities. When a re-patch is needed due to new vulnerabilities, Copa creates version-suffixed tags since registry tags are immutable:
 
 ```
 nginx:1.25.3            ← original source image
@@ -131,20 +131,17 @@ This automatic versioning:
 - Ensures each patch is comprehensive (all updates from original)
 - Works with custom tag templates (e.g., `{{ .SourceTag }}-fixed`)
 
-To always create new versioned tags regardless of vulnerability status, use the `--force` flag.
-
 ## How does bulk patching decide whether to skip an image?
 
 Copa uses vulnerability reports you provide to decide whether re-patching is needed. Reports are matched by reading the `ArtifactName` field from inside each JSON file:
 
 1. **No existing patched tag**: Proceeds with patching using the base tag
 2. **Existing patched tag exists**:
-   - If `--patched-reports-dir` provided: Looks up the vulnerability report by `ArtifactName`
+   - If `-r` provided: Looks up the vulnerability report by `ArtifactName`
      - Report shows no fixable vulnerabilities → skips patching (saves time)
      - Report shows fixable vulnerabilities → re-patches with version-bumped tag
      - Report not found (no matching `ArtifactName`) → proceeds with patching (fail-open)
-   - If `--patched-reports-dir` not provided: Always proceeds with patching
-3. **Force flag used**: Always re-patches with version-bumped tag (skips report check)
+   - If `-r` not provided: Always proceeds with patching
 
 **Important**: The vulnerability report only determines whether to re-patch, not what to patch. When patching occurs, Copa still applies comprehensive updates to all packages (not selective patching based on specific CVEs).
 
