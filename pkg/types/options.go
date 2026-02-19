@@ -15,8 +15,7 @@ type Options struct {
 	Suffix     string
 
 	// Bulk image patch configuration
-	ConfigFile        string
-	PatchedReportsDir string
+	ConfigFile string
 
 	// Working environment
 	WorkingFolder string
@@ -25,7 +24,6 @@ type Options struct {
 	// Scanner and output
 	Scanner     string
 	IgnoreError bool
-	Force       bool
 
 	// Output configuration
 	Format   string

@@ -356,7 +356,6 @@ func TestEvaluatePatchAction(t *testing.T) {
 		repo             string
 		baseTag          string
 		scanner          string
-		force            bool
 		reports          *reportIndex
 		existingTags     []string
 		reportResult     bool // true = has vulns, false = no vulns
@@ -371,7 +370,6 @@ func TestEvaluatePatchAction(t *testing.T) {
 			repo:             "registry.io/nginx",
 			baseTag:          "1.25.3-patched",
 			scanner:          "trivy",
-			force:            false,
 			reports:          &reportIndex{refs: map[string]string{}},
 			existingTags:     []string{},
 			expectedSkip:     false,
@@ -382,7 +380,6 @@ func TestEvaluatePatchAction(t *testing.T) {
 			repo:    "registry.io/nginx",
 			baseTag: "1.25.3-patched",
 			scanner: "trivy",
-			force:   false,
 			reports: &reportIndex{refs: map[string]string{
 				"registry.io/nginx:1.25.3-patched": "/tmp/reports/report1.json",
 			}},
@@ -397,7 +394,6 @@ func TestEvaluatePatchAction(t *testing.T) {
 			repo:    "registry.io/nginx",
 			baseTag: "1.25.3-patched",
 			scanner: "trivy",
-			force:   false,
 			reports: &reportIndex{refs: map[string]string{
 				"registry.io/nginx:1.25.3-patched": "/tmp/reports/report1.json",
 			}},
@@ -407,23 +403,10 @@ func TestEvaluatePatchAction(t *testing.T) {
 			expectedResolved: "1.25.3-patched-1",
 		},
 		{
-			name:             "existing tags, force flag set",
-			repo:             "registry.io/nginx",
-			baseTag:          "1.25.3-patched",
-			scanner:          "trivy",
-			force:            true,
-			reports:          &reportIndex{refs: map[string]string{}},
-			existingTags:     []string{"1.25.3-patched", "1.25.3-patched-1"},
-			reportResult:     false, // report check should not be called
-			expectedSkip:     false,
-			expectedResolved: "1.25.3-patched-2",
-		},
-		{
 			name:    "existing tag, report parse error",
 			repo:    "registry.io/nginx",
 			baseTag: "1.25.3-patched",
 			scanner: "trivy",
-			force:   false,
 			reports: &reportIndex{refs: map[string]string{
 				"registry.io/nginx:1.25.3-patched": "/tmp/reports/report1.json",
 			}},
@@ -437,7 +420,6 @@ func TestEvaluatePatchAction(t *testing.T) {
 			repo:             "registry.io/nginx",
 			baseTag:          "1.25.3-patched",
 			scanner:          "trivy",
-			force:            false,
 			reports:          &reportIndex{refs: map[string]string{}}, // empty index
 			existingTags:     []string{"1.25.3-patched"},
 			expectedSkip:     false,
@@ -448,7 +430,6 @@ func TestEvaluatePatchAction(t *testing.T) {
 			repo:             "registry.io/nginx",
 			baseTag:          "1.25.3-patched",
 			scanner:          "trivy",
-			force:            false,
 			reports:          &reportIndex{refs: map[string]string{}},
 			listTagsError:    fmt.Errorf("auth error"),
 			expectedSkip:     false,
@@ -459,7 +440,6 @@ func TestEvaluatePatchAction(t *testing.T) {
 			repo:             "registry.io/nginx",
 			baseTag:          "1.25.3-patched",
 			scanner:          "trivy",
-			force:            false,
 			reports:          nil, // nil index
 			existingTags:     []string{"1.25.3-patched"},
 			expectedSkip:     false,
@@ -470,7 +450,6 @@ func TestEvaluatePatchAction(t *testing.T) {
 			repo:    "registry.io/nginx",
 			baseTag: "1.25.3-patched",
 			scanner: "trivy",
-			force:   false,
 			reports: &reportIndex{refs: map[string]string{
 				"registry.io/nginx:1.25.3-patched-2": "/tmp/reports/report1.json",
 			}},
@@ -485,7 +464,6 @@ func TestEvaluatePatchAction(t *testing.T) {
 			repo:    "registry.io/nginx",
 			baseTag: "1.25.3-patched",
 			scanner: "trivy",
-			force:   false,
 			reports: &reportIndex{refs: map[string]string{
 				"registry.io/nginx:1.25.3-patched-2": "/tmp/reports/report1.json",
 			}},
@@ -499,7 +477,6 @@ func TestEvaluatePatchAction(t *testing.T) {
 			repo:    "registry.io/nginx",
 			baseTag: "1.25.3-patched",
 			scanner: "native",
-			force:   false,
 			reports: &reportIndex{refs: map[string]string{
 				"registry.io/nginx:1.25.3-patched": "/tmp/reports/report1.json",
 			}},
@@ -537,14 +514,14 @@ func TestEvaluatePatchAction(t *testing.T) {
 				return tt.reportResult, nil
 			}
 
-			result := evaluatePatchAction(tt.repo, tt.baseTag, tt.scanner, tt.force, tt.reports, "os", "patch")
+			result := evaluatePatchAction(tt.repo, tt.baseTag, tt.scanner, tt.reports, "os", "patch")
 
 			assert.Equal(t, tt.expectedSkip, result.ShouldSkip, "ShouldSkip mismatch")
 			assert.Equal(t, tt.expectedReason, result.Reason, "Reason mismatch")
 			assert.Equal(t, tt.expectedResolved, result.ResolvedTag, "ResolvedTag mismatch")
 
 			// Verify check was only called when expected
-			if tt.force || len(tt.existingTags) == 0 || tt.reports == nil || tt.listTagsError != nil {
+			if len(tt.existingTags) == 0 || tt.reports == nil || tt.listTagsError != nil {
 				assert.False(t, checkCalled, "Report check should not have been called")
 			} else {
 				// Check was called only if report was found
