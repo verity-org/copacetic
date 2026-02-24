@@ -49,6 +49,7 @@ type patchArgs struct {
 	eolAPIBaseURL     string
 	exitOnEOL         bool
 	configFile        string
+	outputJSON        string
 }
 
 func NewPatchCmd() *cobra.Command {
@@ -92,6 +93,7 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 				IgnoreError:       ua.ignoreError,
 				Format:            ua.format,
 				Output:            ua.output,
+				OutputJSON:        ua.outputJSON,
 				BkAddr:            ua.bkOpts.Addr,
 				BkCACertPath:      ua.bkOpts.CACertPath,
 				BkCertPath:        ua.bkOpts.CertPath,
@@ -131,6 +133,7 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 	}
 	flags := patchCmd.Flags()
 	flags.StringVar(&ua.configFile, "config", "", "Path to a bulk patch YAML config file (Comprehensive update only). Cannot be used with --image or --tag.")
+	flags.StringVar(&ua.outputJSON, "output-json", "", "Write bulk patch results as JSON to the specified file path (bulk mode only)")
 	flags.StringVarP(&ua.appImage, "image", "i", "", "Application image name and tag to patch")
 	flags.StringVarP(&ua.report, "report", "r", "", "Vulnerability report file (single-image mode) or directory of reports for patched images (bulk mode)")
 	flags.StringVarP(&ua.patchedTag, "tag", "t", "", "Tag for the patched image")

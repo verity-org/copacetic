@@ -26,9 +26,10 @@ type Options struct {
 	IgnoreError bool
 
 	// Output configuration
-	Format   string
-	Output   string
-	Progress progressui.DisplayMode
+	Format     string
+	Output     string
+	OutputJSON string
+	Progress   progressui.DisplayMode
 
 	// Buildkit connection options
 	BkAddr       string

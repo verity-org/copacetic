@@ -3,6 +3,7 @@ package bulk
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"runtime"
@@ -279,10 +280,55 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 	// Print a summary of all patch jobs.
 	printSummary(results)
 
+	if opts.OutputJSON != "" {
+		if err := writeJSONResults(opts.OutputJSON, results); err != nil {
+			log.Errorf("Failed to write JSON results: %v", err)
+		}
+	}
+
 	if opts.IgnoreError {
 		return nil
 	}
 	return multiErr.ErrorOrNil()
+}
+
+// patchJobResult is the JSON-serializable form of patchJobStatus.
+type patchJobResult struct {
+	Name    string `json:"name"`
+	Source  string `json:"source"`
+	Target  string `json:"target"`
+	Status  string `json:"status"`
+	Error   string `json:"error,omitempty"`
+	Details string `json:"details,omitempty"`
+}
+
+// writeJSONResults serializes the patch job results to a JSON file at the given path.
+func writeJSONResults(path string, results []patchJobStatus) error {
+	jsonResults := make([]patchJobResult, len(results))
+	for i, r := range results {
+		jr := patchJobResult{
+			Name:    r.Name,
+			Source:  r.Source,
+			Target:  r.Target,
+			Status:  r.Status,
+			Details: r.Details,
+		}
+		if r.Error != nil {
+			jr.Error = r.Error.Error()
+		}
+		jsonResults[i] = jr
+	}
+
+	data, err := json.MarshalIndent(jsonResults, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal results to JSON: %w", err)
+	}
+
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("failed to write JSON results to %s: %w", path, err)
+	}
+
+	return nil
 }
 
 // resolveTargetTag resolves the target tag for a patched image based on the provided TargetSpec and the source tag.
