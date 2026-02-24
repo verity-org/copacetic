@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/distribution/reference"
-	"github.com/moby/buildkit/util/progress/progressui"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/project-copacetic/copacetic/pkg/buildkit"
@@ -34,7 +33,7 @@ func Patch(ctx context.Context, opts *types.Options) error {
 	}
 	if _, ok := allowedProgressModes[string(opts.Progress)]; !ok {
 		log.Warnf("Invalid value for --progress: %q. Allowed values are 'auto', 'plain' 'tty', 'quiet' or 'rawjson'. Defaulting to 'auto'.", string(opts.Progress))
-		opts.Progress = progressui.DisplayMode("auto")
+		opts.Progress = types.AutoMode
 	}
 	// Create timeout context
 	timeoutCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
