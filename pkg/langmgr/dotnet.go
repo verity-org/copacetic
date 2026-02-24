@@ -10,6 +10,7 @@ import (
 	"github.com/moby/buildkit/client/llb"
 	"github.com/project-copacetic/copacetic/pkg/buildkit"
 	"github.com/project-copacetic/copacetic/pkg/types/unversioned"
+	"github.com/project-copacetic/copacetic/pkg/utils"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -297,7 +298,7 @@ func (dnm *dotnetManager) patchRuntimeImage(
 
 	discoveryState := imageState.Run(
 		llb.Shlex(findDepsCmd),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 
 	// Extract the detected framework version to use the correct SDK image
@@ -373,14 +374,14 @@ cat /patch/patch.csproj'`, targetFramework, packageRefs.String())
 
 	projectCreated := sdkState.Run(
 		llb.Shlex(createProjectCmd),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 
 	// Restore and publish to extract the fixed DLLs, then install jq for deps.json manipulation
 	restoreAndPublishCmd := `sh -c 'cd /patch && dotnet restore && dotnet publish -c Release -o /output && apt-get update -qq && apt-get install -qq -y jq >/dev/null 2>&1'`
 	publishedDLLs := projectCreated.Run(
 		llb.Shlex(restoreAndPublishCmd),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 
 	// Copy the patched DLLs and native dependencies back to the runtime image
@@ -435,7 +436,7 @@ echo "DLL patching complete"
 	patchedState := discoveryState.Run(
 		llb.AddMount("/output", publishedDLLs, llb.SourcePath("/output"), llb.Readonly),
 		llb.Shlex(copyDLLsScript),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 
 	// Now run deps.json update in SDK container with jq, then copy result back to runtime image
@@ -451,7 +452,7 @@ echo "DLL patching complete"
 	sdkWithDepsUpdate := publishedDLLs.Run(
 		llb.AddMount("/runtime-tmp", patchedState, llb.SourcePath("/tmp")),
 		llb.Args([]string{"sh", "-c", updateDepsJsonScript}),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 
 	// Copy the updated deps.json back to the runtime image
@@ -467,7 +468,7 @@ fi
 	depsUpdatedState := patchedState.Run(
 		llb.AddMount("/updated-deps", sdkWithDepsUpdate, llb.SourcePath("/output"), llb.Readonly),
 		llb.Args([]string{"sh", "-c", copyUpdatedDepsScript}),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 
 	// Clean up temporary files from /tmp that were created during patching
@@ -482,7 +483,7 @@ rm -f /tmp/framework_version
 '`
 	cleanedState := depsUpdatedState.Run(
 		llb.Shlex(cleanupScript),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 
 	log.Info("Runtime patching completed")

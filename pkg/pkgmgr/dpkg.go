@@ -209,7 +209,7 @@ func (dm *dpkgManager) probeDPKGStatus(ctx context.Context, toolImage string, pl
 	)
 	updated := toolingBase.Run(
 		llb.Shlex("apt-get -o Acquire::Retries=3 update"),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 		llb.IgnoreCache,
 		llb.WithCustomName("Updating package database"),
 	).Root()
@@ -217,7 +217,7 @@ func (dm *dpkgManager) probeDPKGStatus(ctx context.Context, toolImage string, pl
 	const installBusyBoxCmd = "apt-get -o Acquire::Retries=3 install busybox-static"
 	busyBoxInstalled := updated.Run(
 		llb.Shlex(installBusyBoxCmd),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 		llb.WithCustomName("Installing busybox")).Root()
 	busyBoxApplied := imageStateCurrent.File(llb.Copy(busyBoxInstalled, "/bin/busybox", "/bin/busybox"))
 	mkFolders := busyBoxApplied.File(llb.Mkdir(resultsPath, 0o744, llb.WithParents(true)))
@@ -345,7 +345,7 @@ func (dm *dpkgManager) installUpdates(ctx context.Context, updates unversioned.U
 
 	aptGetUpdated := imageStateCurrent.Run(
 		llb.Shlex("apt-get -o Acquire::Retries=3 update"),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 		llb.IgnoreCache,
 		llb.WithCustomName("Updating package database"),
 	).Root()
@@ -408,7 +408,7 @@ func (dm *dpkgManager) installUpdates(ctx context.Context, updates unversioned.U
 	}
 	aptGetInstalled := aptGetUpdated.Run(
 		llb.Shlex(installCmd),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 		llb.WithCustomName(customName),
 	).Root()
 
@@ -484,7 +484,7 @@ func (dm *dpkgManager) unpackAndMergeUpdates(ctx context.Context, updates unvers
 	// Run apt-get update && apt-get download list of updates to target folder
 	updated := toolingBase.Run(
 		llb.Shlex("apt-get -o Acquire::Retries=3 update"),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 		llb.IgnoreCache,
 		llb.WithCustomName("Updating package database in tooling container"),
 	).Root()
@@ -610,7 +610,7 @@ func (dm *dpkgManager) unpackAndMergeUpdates(ctx context.Context, updates unvers
 		llb.AddEnv("UPDATE_ALL", updateAll),
 		llb.AddEnv("STATUSD_FILE_MAP", string(jsonStatusdFileMap)),
 		buildkit.Sh(`./download.sh`),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 		llb.WithCustomName(downloadCustomName),
 	).AddMount("/tmp/debian-rootfs", withDPkgStatus)
 

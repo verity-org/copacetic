@@ -12,6 +12,14 @@ import (
 	"github.com/project-copacetic/copacetic/pkg/utils"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+
+	// Register connection helpers for buildkit.
+	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
+	_ "github.com/moby/buildkit/client/connhelper/kubepod"
+	_ "github.com/moby/buildkit/client/connhelper/nerdctlcontainer"
+	_ "github.com/moby/buildkit/client/connhelper/podmancontainer"
+	_ "github.com/moby/buildkit/client/connhelper/ssh"
+	"github.com/moby/buildkit/util/progress/progressui"
 )
 
 type generateArgs struct {
@@ -80,7 +88,7 @@ This command produces a build context with the patch diff layer and a Dockerfile
 				Loader:            ga.loader,
 				PkgTypes:          ga.pkgTypes,
 				LibraryPatchLevel: ga.libraryPatchLevel,
-				Progress:          types.DisplayMode(ga.progress),
+				Progress:          progressui.DisplayMode(ga.progress),
 			}
 			return Generate(context.Background(), opts)
 		},

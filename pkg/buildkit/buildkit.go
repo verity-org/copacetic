@@ -853,11 +853,7 @@ func createOCILayoutFromStates(outputDir string, results []types.PatchResult, pl
 	for _, platform := range patchedPlatforms {
 		platformKey := PlatformKey(platform.Platform)
 		if result, exists := resultMap[platformKey]; exists && result.PatchedState != nil {
-			state, ok := result.PatchedState.(*llb.State)
-			if !ok {
-				return fmt.Errorf("unexpected PatchedState type %T for platform %s", result.PatchedState, platformKey)
-			}
-			platformStates = append(platformStates, *state)
+			platformStates = append(platformStates, *result.PatchedState)
 			platformSpecs = append(platformSpecs, platform.Platform)
 		}
 	}

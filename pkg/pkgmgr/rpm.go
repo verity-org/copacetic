@@ -323,7 +323,7 @@ func (rm *rpmManager) probeRPMStatus(ctx context.Context, toolImage string, plat
 
 	toolsInstalled := toolingBase.Run(
 		llb.Shlex(installToolsCmd),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 		llb.WithCustomName("Installing package management tools"),
 	).Root()
 	toolsApplied := imageStateCurrent.File(llb.Copy(toolsInstalled, "/usr/sbin/busybox", "/usr/sbin/busybox"))
@@ -562,7 +562,7 @@ func (rm *rpmManager) installUpdates(ctx context.Context, updates unversioned.Up
 
 	installed := imageStateCurrent.Run(
 		llb.Shlex(installCmd),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 		llb.WithCustomName(customName),
 	).Root()
 
@@ -654,7 +654,7 @@ func (rm *rpmManager) unpackAndMergeUpdates(ctx context.Context, updates unversi
 	}
 
 	// Install busybox. This should reuse the layer cached from probeRPMStatus.
-	toolsInstalled := toolingBase.Run(llb.Shlex(installToolsCmd), llb.WithProxy(buildkit.GetProxy())).Root()
+	toolsInstalled := toolingBase.Run(llb.Shlex(installToolsCmd), llb.WithProxy(utils.GetProxy())).Root()
 	busyboxCopied := toolsInstalled.Dir(downloadPath).Run(llb.Shlex("cp /usr/sbin/busybox .")).Root()
 
 	// Retrieve all package info from image to be patched.
@@ -815,7 +815,7 @@ func (rm *rpmManager) unpackAndMergeUpdates(ctx context.Context, updates unversi
 		llb.AddEnv("OS_VERSION", rm.osVersion),
 		llb.AddEnv("IGNORE_ERRORS", errorValidation),
 		buildkit.Sh(downloadCmd),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 		llb.AddMount("/tmp/rpmdb", rpmdb),
 	).AddMount("/tmp/rootfs", rm.config.ImageState)
 
@@ -932,7 +932,7 @@ func (rm *rpmManager) zypperChrootInstallUpdates(ctx context.Context, updates un
 		llb.AddEnv("COPA_MANIFEST_FILE", filepath.Join(chrootDir, manifestFile)),
 		llb.AddEnv("COPA_UPDATES_MARKER", updatesMarkerFile),
 		buildkit.Sh(zypperCmd),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	)
 
 	downloaded := run.AddMount(chrootDir, imageStateCurrent)

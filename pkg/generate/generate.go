@@ -16,6 +16,7 @@ import (
 	gwclient "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/auth/authprovider"
+	"github.com/moby/buildkit/util/progress/progressui"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
@@ -171,7 +172,7 @@ func extractPatchLayer(
 	workingFolder string,
 	ignoreErrors bool,
 	reportFile, format, output string,
-	progress types.DisplayMode,
+	progress progressui.DisplayMode,
 ) ([]byte, error) {
 	dockerConfig := config.LoadDefaultConfigFile(os.Stderr)
 	cfg := authprovider.DockerAuthProviderConfig{ConfigFile: dockerConfig}

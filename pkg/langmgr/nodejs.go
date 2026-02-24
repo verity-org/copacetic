@@ -463,7 +463,7 @@ func (nm *nodejsManager) upgradePackages(
 		`rm -rf /home/*/.npm 2>&1 || echo "WARN: Failed to remove /home/*/.npm"; ` +
 		// Remove npm's global cache if it exists
 		`rm -rf /tmp/npm-* 2>&1 || echo "WARN: Failed to remove /tmp/npm-*"'`
-	updatedState = updatedState.Run(llb.Shlex(cleanupCmd), llb.WithProxy(buildkit.GetProxy())).Root()
+	updatedState = updatedState.Run(llb.Shlex(cleanupCmd), llb.WithProxy(utils.GetProxy())).Root()
 
 	return &updatedState, nil
 }
@@ -497,7 +497,7 @@ func (nm *nodejsManager) installNodePackages(
 			`delete pkg.devDependencies; fs.writeFileSync('\''package.json'\'', JSON.stringify(pkg, null, 2));"'`,
 		workDir,
 	)
-	state = state.Run(llb.Shlex(removeDevDepsCmd), llb.WithProxy(buildkit.GetProxy())).Root()
+	state = state.Run(llb.Shlex(removeDevDepsCmd), llb.WithProxy(utils.GetProxy())).Root()
 
 	var transitiveUpdates unversioned.LangUpdatePackages
 
@@ -522,7 +522,7 @@ func (nm *nodejsManager) installNodePackages(
 			log.Infof("Installing direct dependency %s in %s", pkgSpec, workDir)
 			state = state.Run(
 				llb.Shlex(installCmd),
-				llb.WithProxy(buildkit.GetProxy()),
+				llb.WithProxy(utils.GetProxy()),
 			).Root()
 		} else {
 			transitiveUpdates = append(transitiveUpdates, u)
@@ -559,7 +559,7 @@ func (nm *nodejsManager) installNodePackages(
 			log.Infof("Applying npm overrides for transitive dependencies in %s: %s", workDir, overridesJSON)
 			state = state.Run(
 				llb.Shlex(installCmd),
-				llb.WithProxy(buildkit.GetProxy()),
+				llb.WithProxy(utils.GetProxy()),
 			).Root()
 		}
 	}
@@ -575,7 +575,7 @@ func (nm *nodejsManager) installNodePackages(
 	)
 	state = state.Run(
 		llb.Shlex(cleanupCmd),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 
 	return state
@@ -735,7 +735,7 @@ func (nm *nodejsManager) upgradePackagesWithTooling(
 		)
 		toolingState = toolingState.Dir("/app").Run(
 			llb.Shlex(toolingInstallCmd),
-			llb.WithProxy(buildkit.GetProxy()),
+			llb.WithProxy(utils.GetProxy()),
 		).Root()
 
 		// Copy the updated node_modules and package files back
@@ -785,7 +785,7 @@ func (nm *nodejsManager) upgradeGlobalPackages(
 
 		state = state.Run(
 			llb.Shlex(upgradeCmd),
-			llb.WithProxy(buildkit.GetProxy()),
+			llb.WithProxy(utils.GetProxy()),
 		).Root()
 
 		log.Infof("npm upgraded to version compatible with Node.js %s", nodeVersionStr)
@@ -864,7 +864,7 @@ func (nm *nodejsManager) upgradeGlobalPackages(
 				`delete pkg.devDependencies; fs.writeFileSync('\''package.json'\'', JSON.stringify(pkg, null, 2));"'`,
 			pkgPath,
 		)
-		state = state.Run(llb.Shlex(removeDevDepsCmd), llb.WithProxy(buildkit.GetProxy())).Root()
+		state = state.Run(llb.Shlex(removeDevDepsCmd), llb.WithProxy(utils.GetProxy())).Root()
 
 		// Separate into direct and transitive updates
 		var directUpdates unversioned.LangUpdatePackages
@@ -913,7 +913,7 @@ func (nm *nodejsManager) upgradeGlobalPackages(
 				log.Infof("Installing direct dependencies for global package %s: %s", pkgName, strings.Join(pkgSpecs, ", "))
 				state = state.Run(
 					llb.Shlex(installCmd),
-					llb.WithProxy(buildkit.GetProxy()),
+					llb.WithProxy(utils.GetProxy()),
 				).Root()
 			}
 		}
@@ -967,7 +967,7 @@ func (nm *nodejsManager) upgradeGlobalPackages(
 
 				state = state.Run(
 					llb.Shlex(installCmd),
-					llb.WithProxy(buildkit.GetProxy()),
+					llb.WithProxy(utils.GetProxy()),
 				).Root()
 			}
 		}

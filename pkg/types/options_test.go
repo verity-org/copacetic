@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moby/buildkit/util/progress/progressui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -49,7 +50,7 @@ func TestOptions(t *testing.T) {
 
 			Format:   "oci",
 			Output:   "/tmp/output",
-			Progress: AutoMode,
+			Progress: progressui.DisplayMode("auto"),
 
 			BkAddr:       "tcp://buildkit:1234",
 			BkCACertPath: "/certs/ca.pem",
@@ -73,7 +74,7 @@ func TestOptions(t *testing.T) {
 		assert.True(t, opts.IgnoreError)
 		assert.Equal(t, "oci", opts.Format)
 		assert.Equal(t, "/tmp/output", opts.Output)
-		assert.Equal(t, AutoMode, opts.Progress)
+		assert.Equal(t, progressui.DisplayMode("auto"), opts.Progress)
 		assert.Equal(t, "tcp://buildkit:1234", opts.BkAddr)
 		assert.Equal(t, "/certs/ca.pem", opts.BkCACertPath)
 		assert.Equal(t, "/certs/cert.pem", opts.BkCertPath)
@@ -150,10 +151,10 @@ func TestOptions(t *testing.T) {
 	})
 
 	t.Run("Progress display modes", func(t *testing.T) {
-		testCases := []DisplayMode{
-			AutoMode,
-			PlainMode,
-			TtyMode,
+		testCases := []progressui.DisplayMode{
+			progressui.AutoMode,
+			progressui.PlainMode,
+			progressui.TtyMode,
 		}
 
 		for _, mode := range testCases {

@@ -2,17 +2,8 @@ package types
 
 import (
 	"time"
-)
 
-// DisplayMode controls how BuildKit progress output is rendered.
-type DisplayMode string
-
-const (
-	AutoMode    DisplayMode = "auto"
-	PlainMode   DisplayMode = "plain"
-	TtyMode     DisplayMode = "tty"
-	QuietMode   DisplayMode = "quiet"
-	RawJSONMode DisplayMode = "rawjson"
+	"github.com/moby/buildkit/util/progress/progressui"
 )
 
 // Options contains common copacetic options.
@@ -38,7 +29,7 @@ type Options struct {
 	Format     string
 	Output     string
 	OutputJSON string
-	Progress   DisplayMode
+	Progress   progressui.DisplayMode
 
 	// Buildkit connection options
 	BkAddr       string

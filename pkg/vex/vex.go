@@ -4,8 +4,13 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/project-copacetic/copacetic/pkg/pkgmgr"
 	"github.com/project-copacetic/copacetic/pkg/types/unversioned"
 )
+
+type Vex interface {
+	CreateVEXDocument(updates *unversioned.UpdateManifest, patchedImageName string, pkgmgr pkgmgr.PackageManager) (string, error)
+}
 
 func TryOutputVexDocument(updates *unversioned.UpdateManifest, pkgType, patchedImageName, format, file string) error {
 	var doc string

@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/moby/buildkit/client"
+	"github.com/moby/buildkit/util/progress/progressui"
 	"github.com/opencontainers/go-digest"
-	"github.com/project-copacetic/copacetic/pkg/types"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sync/errgroup"
@@ -17,7 +17,7 @@ func TestDisplayProgress(t *testing.T) {
 	ctx := context.Background()
 	eg, egCtx := errgroup.WithContext(ctx)
 	buildChannel := make(chan *client.SolveStatus)
-	progress := types.AutoMode
+	progress := progressui.AutoMode
 
 	// Start the display progress goroutine
 	DisplayProgress(egCtx, eg, buildChannel, progress)
@@ -70,7 +70,7 @@ func TestDisplayProgress_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	eg, egCtx := errgroup.WithContext(ctx)
 	buildChannel := make(chan *client.SolveStatus)
-	progress := types.AutoMode
+	progress := progressui.AutoMode
 
 	// Start the display progress goroutine
 	DisplayProgress(egCtx, eg, buildChannel, progress)
@@ -94,7 +94,7 @@ func TestDisplayProgressQuiet(t *testing.T) {
 	ch := make(chan *client.SolveStatus)
 
 	// Start progress display in quiet mode
-	DisplayProgress(ctx, eg, ch, types.QuietMode)
+	DisplayProgress(ctx, eg, ch, progressui.QuietMode)
 
 	// Send some status updates
 	now := time.Now()
@@ -125,7 +125,7 @@ func TestDisplayProgressPlain(t *testing.T) {
 	ch := make(chan *client.SolveStatus)
 
 	// Start progress display in plain mode
-	DisplayProgress(ctx, eg, ch, types.PlainMode)
+	DisplayProgress(ctx, eg, ch, progressui.PlainMode)
 
 	// Send some status updates
 	now := time.Now()
@@ -163,7 +163,7 @@ func TestDisplayProgressWithDebugMode(t *testing.T) {
 	ch := make(chan *client.SolveStatus)
 
 	// Start progress display - should use plain mode due to debug
-	DisplayProgress(ctx, eg, ch, types.AutoMode)
+	DisplayProgress(ctx, eg, ch, progressui.AutoMode)
 
 	// Close the channel immediately
 	close(ch)

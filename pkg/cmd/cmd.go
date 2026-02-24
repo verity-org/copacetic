@@ -17,6 +17,14 @@ import (
 	"github.com/project-copacetic/copacetic/pkg/utils"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+
+	// Register connection helpers for buildkit.
+	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
+	_ "github.com/moby/buildkit/client/connhelper/kubepod"
+	_ "github.com/moby/buildkit/client/connhelper/nerdctlcontainer"
+	_ "github.com/moby/buildkit/client/connhelper/podmancontainer"
+	_ "github.com/moby/buildkit/client/connhelper/ssh"
+	"github.com/moby/buildkit/util/progress/progressui"
 )
 
 type patchArgs struct {
@@ -95,7 +103,7 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 				Loader:            ua.loader,
 				PkgTypes:          ua.pkgTypes,
 				LibraryPatchLevel: ua.libraryPatchLevel,
-				Progress:          types.DisplayMode(ua.progress),
+				Progress:          progressui.DisplayMode(ua.progress),
 				OCIDir:            ua.ociDir,
 				EOLAPIBaseURL:     ua.eolAPIBaseURL,
 				ExitOnEOL:         ua.exitOnEOL,
