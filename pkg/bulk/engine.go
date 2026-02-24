@@ -225,6 +225,20 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 				// Build the full patched image reference using target repository
 				patchedImageRef := fmt.Sprintf("%s:%s", targetRepo, finalTag)
 
+				if opts.DryRun {
+					// Dry-run: record what would be patched without patching.
+					mu.Lock()
+					results = append(results, patchJobStatus{
+						Name:   spec.Name,
+						Source: imageWithTag,
+						Target: patchedImageRef,
+						Status: "WouldPatch",
+					})
+					mu.Unlock()
+					log.Debugf("[Worker %d] --> Dry-run: would patch %s → %s", workerID, imageWithTag, patchedImageRef)
+					continue
+				}
+
 				jobOpts := *opts // Shallow copy of the global options
 				jobOpts.Image = imageWithTag
 				jobOpts.PatchedTag = patchedImageRef

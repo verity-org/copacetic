@@ -226,6 +226,7 @@ func evaluatePatchAction(repo, baseTag, scanner string, reports *reportIndex, pk
 		log.Debugf("No existing patched tags found for '%s', proceeding with base tag '%s'", repo, baseTag)
 		return skipCheckResult{
 			ShouldSkip:  false,
+			Reason:      "not_patched",
 			ResolvedTag: baseTag,
 		}
 	}
@@ -282,6 +283,7 @@ func evaluatePatchAction(repo, baseTag, scanner string, reports *reportIndex, pk
 	log.Debugf("Fixable vulnerabilities found in report for '%s', re-patching with tag '%s'", imageRef, nextTag)
 	return skipCheckResult{
 		ShouldSkip:  false,
+		Reason:      "new_vulnerabilities",
 		ResolvedTag: nextTag,
 	}
 }

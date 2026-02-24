@@ -16,6 +16,7 @@ type Options struct {
 
 	// Bulk image patch configuration
 	ConfigFile string
+	DryRun     bool // Skip actual patching; run discovery and skip detection only
 
 	// Working environment
 	WorkingFolder string

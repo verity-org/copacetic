@@ -373,6 +373,7 @@ func TestEvaluatePatchAction(t *testing.T) {
 			reports:          &reportIndex{refs: map[string]string{}},
 			existingTags:     []string{},
 			expectedSkip:     false,
+			expectedReason:   "not_patched",
 			expectedResolved: "1.25.3-patched",
 		},
 		{
@@ -400,6 +401,7 @@ func TestEvaluatePatchAction(t *testing.T) {
 			existingTags:     []string{"1.25.3-patched"},
 			reportResult:     true, // has vulns
 			expectedSkip:     false,
+			expectedReason:   "new_vulnerabilities",
 			expectedResolved: "1.25.3-patched-1",
 		},
 		{
@@ -433,7 +435,8 @@ func TestEvaluatePatchAction(t *testing.T) {
 			reports:          &reportIndex{refs: map[string]string{}},
 			listTagsError:    fmt.Errorf("auth error"),
 			expectedSkip:     false,
-			expectedResolved: "1.25.3-patched", // fail-open to base tag
+			expectedReason:   "not_patched", // discoverExistingPatchTags returns [] on error (fail-open)
+			expectedResolved: "1.25.3-patched",
 		},
 		{
 			name:             "no reports index provided",
@@ -470,6 +473,7 @@ func TestEvaluatePatchAction(t *testing.T) {
 			existingTags:     []string{"1.25.3-patched", "1.25.3-patched-1", "1.25.3-patched-2"},
 			reportResult:     true,
 			expectedSkip:     false,
+			expectedReason:   "new_vulnerabilities",
 			expectedResolved: "1.25.3-patched-3", // next version
 		},
 		{

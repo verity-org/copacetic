@@ -1,12 +1,15 @@
 package bulk
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/project-copacetic/copacetic/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -92,6 +95,133 @@ func TestWriteJSONResults(t *testing.T) {
 			tt.validate(t, got)
 		})
 	}
+}
+
+func TestPatchFromConfig_DryRun(t *testing.T) {
+	// Dry-run must not invoke patch.Patch; it records "WouldPatch" for every
+	// image that skip-detection would not skip.
+	origListAllTags := listAllTags
+	t.Cleanup(func() { listAllTags = origListAllTags })
+	// No existing patched tags → skip detection says "not_patched" → WouldPatch
+	listAllTags = func(_ name.Repository) ([]string, error) {
+		return []string{}, nil
+	}
+
+	configContent := `
+apiVersion: copa.sh/v1alpha1
+kind: PatchConfig
+target:
+  registry: registry.io/myorg
+  tag: "{{ .SourceTag }}-patched"
+images:
+  - name: nginx
+    image: docker.io/library/nginx
+    tags:
+      strategy: list
+      list: ["1.25.0", "1.26.0"]
+  - name: redis
+    image: docker.io/library/redis
+    tags:
+      strategy: list
+      list: ["7.0"]
+`
+	configPath := filepath.Join(t.TempDir(), "copa-config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
+
+	outputPath := filepath.Join(t.TempDir(), "results.json")
+
+	opts := &types.Options{
+		DryRun:            true,
+		Scanner:           "trivy",
+		PkgTypes:          "os",
+		LibraryPatchLevel: "patch",
+		OutputJSON:        outputPath,
+	}
+
+	err := PatchFromConfig(context.Background(), configPath, opts)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+
+	var results []patchJobResult
+	require.NoError(t, json.Unmarshal(data, &results))
+
+	require.Len(t, results, 3)
+	for _, r := range results {
+		assert.Equal(t, "WouldPatch", r.Status)
+		assert.Empty(t, r.Error)
+	}
+
+	// Verify source/target format
+	sources := make(map[string]string)
+	for _, r := range results {
+		sources[r.Source] = r.Target
+	}
+	assert.Equal(t, "registry.io/myorg/nginx:1.25.0-patched", sources["docker.io/library/nginx:1.25.0"])
+	assert.Equal(t, "registry.io/myorg/nginx:1.26.0-patched", sources["docker.io/library/nginx:1.26.0"])
+	assert.Equal(t, "registry.io/myorg/redis:7.0-patched", sources["docker.io/library/redis:7.0"])
+}
+
+func TestPatchFromConfig_DryRun_SkipsAlreadyPatched(t *testing.T) {
+	origListAllTags := listAllTags
+	t.Cleanup(func() { listAllTags = origListAllTags })
+	// Return an existing patched tag
+	listAllTags = func(_ name.Repository) ([]string, error) {
+		return []string{"1.25.0-patched"}, nil
+	}
+
+	origCheckReport := checkReportForVulnerabilities
+	t.Cleanup(func() { checkReportForVulnerabilities = origCheckReport })
+	// No vulnerabilities → skip
+	checkReportForVulnerabilities = func(_, _, _, _ string) (bool, error) {
+		return false, nil
+	}
+
+	reportsDir := t.TempDir()
+	reportJSON := `{"ArtifactName": "registry.io/myorg/nginx:1.25.0-patched"}`
+	require.NoError(t, os.WriteFile(filepath.Join(reportsDir, "report.json"), []byte(reportJSON), 0o600))
+
+	configContent := `
+apiVersion: copa.sh/v1alpha1
+kind: PatchConfig
+target:
+  registry: registry.io/myorg
+  tag: "{{ .SourceTag }}-patched"
+images:
+  - name: nginx
+    image: docker.io/library/nginx
+    tags:
+      strategy: list
+      list: ["1.25.0"]
+`
+	configPath := filepath.Join(t.TempDir(), "copa-config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
+
+	outputPath := filepath.Join(t.TempDir(), "results.json")
+
+	opts := &types.Options{
+		DryRun:            true,
+		Scanner:           "trivy",
+		PkgTypes:          "os",
+		LibraryPatchLevel: "patch",
+		Report:            reportsDir,
+		OutputJSON:        outputPath,
+	}
+
+	err := PatchFromConfig(context.Background(), configPath, opts)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+
+	var results []patchJobResult
+	require.NoError(t, json.Unmarshal(data, &results))
+
+	// Image is already patched with no new vulns → Skipped, not WouldPatch
+	require.Len(t, results, 1)
+	assert.Equal(t, "Skipped", results[0].Status)
+	assert.Equal(t, "no fixable vulnerabilities", results[0].Details)
 }
 
 func TestBuildTargetRepository(t *testing.T) {
