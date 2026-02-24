@@ -403,7 +403,7 @@ func (pm *pythonManager) installPythonPackages(currentState *llb.State, packageS
 		installCmd := fmt.Sprintf(`sh -c '%s'`, strings.Join(installCommands, "; "))
 		return currentState.Run(
 			llb.Shlex(installCmd),
-			llb.WithProxy(utils.GetProxy()),
+			llb.WithProxy(buildkit.GetProxy()),
 		).Root()
 	}
 	// Standard single command install (fail-fast)
@@ -411,7 +411,7 @@ func (pm *pythonManager) installPythonPackages(currentState *llb.State, packageS
 	args = append(args, packageSpecs...)
 	return currentState.Run(
 		llb.Args(args),
-		llb.WithProxy(utils.GetProxy()),
+		llb.WithProxy(buildkit.GetProxy()),
 	).Root()
 }
 
@@ -507,7 +507,7 @@ func (pm *pythonManager) upgradePackagesWithTooling(
 	toolingInstallCmd := fmt.Sprintf("sh -c 'pip install --no-cache-dir --disable-pip-version-check --no-deps --target /copa-pkgs %s'", strings.Join(installPkgSpecs, " "))
 	toolingState := llb.Image(toolingImage).Run(
 		llb.Shlex(toolingInstallCmd),
-		llb.WithProxy(utils.GetProxy()),
+		llb.WithProxy(buildkit.GetProxy()),
 	).Root()
 
 	// Clean old versions of these packages in the detected site-packages path before copying new ones

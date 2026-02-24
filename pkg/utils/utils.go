@@ -16,7 +16,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/types"
-	"github.com/moby/buildkit/client/llb"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/project-copacetic/copacetic/pkg/imageloader"
@@ -123,25 +122,6 @@ func IsSUSEImage(osType string) bool {
 	}
 
 	return false
-}
-
-func getEnvAny(names ...string) string {
-	for _, n := range names {
-		if val := os.Getenv(n); val != "" {
-			return val
-		}
-	}
-	return ""
-}
-
-func GetProxy() llb.ProxyEnv {
-	proxy := llb.ProxyEnv{
-		HTTPProxy:  getEnvAny("HTTP_PROXY"),
-		HTTPSProxy: getEnvAny("HTTPS_PROXY"),
-		NoProxy:    getEnvAny("NO_PROXY"),
-		AllProxy:   getEnvAny("HTTP_PROXY"),
-	}
-	return proxy
 }
 
 // localImageDescriptor tries to get the OCI image descriptor using the local Docker client.

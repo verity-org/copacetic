@@ -11,6 +11,13 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	// Register BuildKit connection helpers so docker://, ssh://, etc. work.
+	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
+	_ "github.com/moby/buildkit/client/connhelper/kubepod"
+	_ "github.com/moby/buildkit/client/connhelper/nerdctlcontainer"
+	_ "github.com/moby/buildkit/client/connhelper/podmancontainer"
+	_ "github.com/moby/buildkit/client/connhelper/ssh"
 )
 
 // Globals for Debug logging flag and version reporting.

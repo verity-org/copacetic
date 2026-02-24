@@ -8,6 +8,7 @@ import (
 	"github.com/moby/buildkit/util/progress/progressui"
 	"github.com/opencontainers/go-digest"
 	"github.com/project-copacetic/copacetic/pkg/tui"
+	"github.com/project-copacetic/copacetic/pkg/types"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
@@ -16,12 +17,12 @@ import (
 // This encapsulates the common pattern used in both generate and patch commands.
 // Uses progrock-based TUI for improved display when progress mode is auto/tty and TTY is available.
 // Falls back to BuildKit's progressui for explicit modes (plain, quiet, rawjson) or debug mode.
-func DisplayProgress(ctx context.Context, eg *errgroup.Group, buildChannel chan *client.SolveStatus, progress progressui.DisplayMode) {
+func DisplayProgress(ctx context.Context, eg *errgroup.Group, buildChannel chan *client.SolveStatus, progress types.DisplayMode) {
 	eg.Go(func() error {
 		isDebug := log.GetLevel() >= log.DebugLevel
 
 		// Pass the progress mode so user's --progress flag is respected
-		display, err := tui.NewDisplay(os.Stderr, isDebug, progress)
+		display, err := tui.NewDisplay(os.Stderr, isDebug, progressui.DisplayMode(progress))
 		if err != nil {
 			return err
 		}

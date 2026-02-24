@@ -14,7 +14,6 @@ import (
 	"github.com/project-copacetic/copacetic/pkg/buildkit"
 	"github.com/project-copacetic/copacetic/pkg/types"
 	"github.com/project-copacetic/copacetic/pkg/types/unversioned"
-	"github.com/project-copacetic/copacetic/pkg/utils"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -166,7 +165,7 @@ func (am *apkManager) upgradePackages(ctx context.Context, updates unversioned.U
 
 	apkUpdated := imageStateCurrent.Run(
 		llb.Shlex("apk update"),
-		llb.WithProxy(utils.GetProxy()),
+		llb.WithProxy(buildkit.GetProxy()),
 		llb.IgnoreCache,
 		llb.WithCustomName("Updating package database")).Root()
 
@@ -200,7 +199,7 @@ func (am *apkManager) upgradePackages(ctx context.Context, updates unversioned.U
 		addCmd := fmt.Sprintf(apkAddTemplate, strings.Join(pkgStrings, " "))
 		apkAdded := apkUpdated.Run(
 			llb.Shlex(addCmd),
-			llb.WithProxy(utils.GetProxy()),
+			llb.WithProxy(buildkit.GetProxy()),
 			llb.WithCustomName(fmt.Sprintf("Installing %d security updates", len(pkgStrings)))).Root()
 
 		// Install all requested update packages without specifying the version. This works around:
@@ -211,7 +210,7 @@ func (am *apkManager) upgradePackages(ctx context.Context, updates unversioned.U
 		installCmd := fmt.Sprintf(apkInstallTemplate, strings.Join(pkgStrings, " "))
 		apkInstalled = apkAdded.Run(
 			llb.Shlex(installCmd),
-			llb.WithProxy(utils.GetProxy()),
+			llb.WithProxy(buildkit.GetProxy()),
 			llb.WithCustomName(fmt.Sprintf("Upgrading %d security updates", len(pkgStrings)))).Root()
 
 		// Write updates-manifest to host for post-patch validation
@@ -230,7 +229,7 @@ func (am *apkManager) upgradePackages(ctx context.Context, updates unversioned.U
 		installCmd := `output=$(apk upgrade --no-cache 2>&1); if [ $? -ne 0 ]; then echo "$output" >>error_log.txt; fi`
 		apkInstalled = apkUpdated.Run(
 			buildkit.Sh(installCmd),
-			llb.WithProxy(utils.GetProxy()),
+			llb.WithProxy(buildkit.GetProxy()),
 			llb.WithCustomName("Upgrading all packages")).Root()
 
 		// Validate no errors were encountered if updating all
