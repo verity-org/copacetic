@@ -528,17 +528,23 @@ func TestGroupPackagesByEnv(t *testing.T) {
 			name: "vendored package is skipped, top-level dist-info path is kept",
 			updates: unversioned.LangUpdatePackages{
 				// Top-level package reported via dist-info METADATA path — patchable, keep it.
-				{Name: "pip", InstalledVersion: "25.3", FixedVersion: "26.0",
-					PkgPath: "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA"},
+				{
+					Name: "pip", InstalledVersion: "25.3", FixedVersion: "26.0",
+					PkgPath: "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA",
+				},
 				// Vendored copy inside setuptools — skip it.
-				{Name: "wheel", InstalledVersion: "0.45.1", FixedVersion: "0.46.2",
-					PkgPath: "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA"},
+				{
+					Name: "wheel", InstalledVersion: "0.45.1", FixedVersion: "0.46.2",
+					PkgPath: "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA",
+				},
 			},
 			expectedSystem: unversioned.LangUpdatePackages{},
 			expectedVenvs: map[string]unversioned.LangUpdatePackages{
 				"/app/.venv": {
-					{Name: "pip", InstalledVersion: "25.3", FixedVersion: "26.0",
-						PkgPath: "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA"},
+					{
+						Name: "pip", InstalledVersion: "25.3", FixedVersion: "26.0",
+						PkgPath: "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA",
+					},
 				},
 			},
 		},
