@@ -588,14 +588,14 @@ func (pm *pythonManager) installPythonPackagesWithPip(currentState *llb.State, p
 		installCmd := fmt.Sprintf(`sh -c '%s'`, strings.Join(installCommands, "; "))
 		return currentState.Run(
 			llb.Shlex(installCmd),
-			llb.WithProxy(utils.GetProxy()),
+			llb.WithProxy(buildkit.GetProxy()),
 		).Root()
 	}
 	args := []string{pipPath, "install", fmt.Sprintf("--timeout=%d", defaultPipInstallTimeoutSeconds)}
 	args = append(args, packageSpecs...)
 	return currentState.Run(
 		llb.Args(args),
-		llb.WithProxy(utils.GetProxy()),
+		llb.WithProxy(buildkit.GetProxy()),
 	).Root()
 }
 
@@ -710,7 +710,7 @@ func (pm *pythonManager) upgradeVenvPackagesWithTooling(
 	toolingInstallCmd := fmt.Sprintf("sh -c 'pip install --no-cache-dir --disable-pip-version-check --no-deps --target /copa-pkgs %s'", strings.Join(installPkgSpecs, " "))
 	toolingState := llb.Image(toolingImage).Run(
 		llb.Shlex(toolingInstallCmd),
-		llb.WithProxy(utils.GetProxy()),
+		llb.WithProxy(buildkit.GetProxy()),
 	).Root()
 
 	// Clean old package directories then copy the new ones in.
