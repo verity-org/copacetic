@@ -9,9 +9,11 @@ import (
 	"testing"
 
 	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/project-copacetic/copacetic/pkg/helm"
 	"github.com/project-copacetic/copacetic/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	helmchart "helm.sh/helm/v3/pkg/chart"
 )
 
 func TestWriteJSONResults(t *testing.T) {
@@ -293,6 +295,319 @@ func TestBuildTargetRepository(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, tt.expected, result)
 			}
+		})
+	}
+}
+
+func TestMergeImageSpecs(t *testing.T) {
+	baseConfig := PatchConfig{
+		APIVersion: ExpectedAPIVersion,
+		Kind:       ExpectedKind,
+		Target:     TargetSpec{Registry: "ghcr.io/org"},
+	}
+
+	tests := []struct {
+		name        string
+		explicit    []ImageSpec
+		chartImages []ImageSpec
+		wantImages  []string // expected image repositories in result
+	}{
+		{
+			name:        "chart images added when no explicit images",
+			explicit:    nil,
+			chartImages: []ImageSpec{{Name: "redis", Image: "redis", Tags: TagStrategy{Strategy: StrategyList, List: []string{"7.0"}}}},
+			wantImages:  []string{"redis"},
+		},
+		{
+			name: "chart images added alongside explicit images",
+			explicit: []ImageSpec{
+				{Name: "nginx", Image: "docker.io/library/nginx", Tags: TagStrategy{Strategy: StrategyList, List: []string{"1.25"}}},
+			},
+			chartImages: []ImageSpec{
+				{Name: "redis", Image: "redis", Tags: TagStrategy{Strategy: StrategyList, List: []string{"7.0"}}},
+			},
+			wantImages: []string{"docker.io/library/nginx", "redis"},
+		},
+		{
+			name: "explicit image takes precedence over chart image with same repo",
+			explicit: []ImageSpec{
+				{Name: "nginx-explicit", Image: "docker.io/library/nginx", Tags: TagStrategy{Strategy: StrategyList, List: []string{"1.26"}}},
+			},
+			chartImages: []ImageSpec{
+				{Name: "nginx-chart", Image: "docker.io/library/nginx", Tags: TagStrategy{Strategy: StrategyList, List: []string{"1.25"}}},
+			},
+			wantImages: []string{"docker.io/library/nginx"},
+		},
+		{
+			name:     "chart-to-chart deduplication",
+			explicit: nil,
+			chartImages: []ImageSpec{
+				{Name: "redis-a", Image: "redis", Tags: TagStrategy{Strategy: StrategyList, List: []string{"7.0"}}},
+				{Name: "redis-b", Image: "redis", Tags: TagStrategy{Strategy: StrategyList, List: []string{"7.0"}}},
+			},
+			wantImages: []string{"redis"},
+		},
+		{
+			name:        "no chart images returns only explicit",
+			explicit:    []ImageSpec{{Name: "nginx", Image: "nginx", Tags: TagStrategy{Strategy: StrategyList, List: []string{"1.25"}}}},
+			chartImages: nil,
+			wantImages:  []string{"nginx"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseConfig
+			cfg.Images = tt.explicit
+			result := mergeImageSpecs(cfg, tt.chartImages)
+
+			gotImages := make([]string, len(result.Images))
+			for i, img := range result.Images {
+				gotImages[i] = img.Image
+			}
+			assert.ElementsMatch(t, tt.wantImages, gotImages)
+
+			// Immutability: original config.Images must not be modified
+			assert.Equal(t, tt.explicit, cfg.Images)
+		})
+	}
+}
+
+func TestChartImagesToSpecs(t *testing.T) {
+	images := []helm.ChartImage{
+		{Repository: "docker.io/nginx", Tag: "1.25.0"},
+		{Repository: "redis", Tag: "7.0"},
+	}
+
+	specs := chartImagesToSpecs(images)
+
+	require.Len(t, specs, 2)
+	assert.Equal(t, "docker.io/nginx", specs[0].Image)
+	assert.Equal(t, "docker.io/nginx", specs[0].Name)
+	assert.Equal(t, StrategyList, specs[0].Tags.Strategy)
+	assert.Equal(t, []string{"1.25.0"}, specs[0].Tags.List)
+
+	assert.Equal(t, "redis", specs[1].Image)
+	assert.Equal(t, []string{"7.0"}, specs[1].Tags.List)
+}
+
+func TestToHelmOverrides(t *testing.T) {
+	overrides := map[string]OverrideSpec{
+		"timberio/vector": {From: "distroless-libc", To: "debian"},
+	}
+	result := toHelmOverrides(overrides)
+	require.Len(t, result, 1)
+	assert.Equal(t, "distroless-libc", result["timberio/vector"].From)
+	assert.Equal(t, "debian", result["timberio/vector"].To)
+
+	assert.Nil(t, toHelmOverrides(nil))
+}
+
+func TestPatchFromConfig_DryRun_WithCharts(t *testing.T) {
+	// Mock chart download and render to avoid network access
+	origDownload := helm.DownloadChart
+	origRender := helm.RenderChart
+	t.Cleanup(func() {
+		helm.DownloadChart = origDownload
+		helm.RenderChart = origRender
+	})
+
+	helm.DownloadChart = func(name, version, repository string) (*helmchart.Chart, error) {
+		return &helmchart.Chart{
+			Metadata: &helmchart.Metadata{Name: name, Version: version},
+		}, nil
+	}
+
+	helm.RenderChart = func(ch *helmchart.Chart) (string, error) {
+		return `
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - image: redis:7.0
+`, nil
+	}
+
+	origListAllTags := listAllTags
+	t.Cleanup(func() { listAllTags = origListAllTags })
+	listAllTags = func(_ name.Repository) ([]string, error) {
+		return []string{}, nil
+	}
+
+	configContent := `
+apiVersion: copa.sh/v1alpha1
+kind: PatchConfig
+target:
+  registry: registry.io/myorg
+charts:
+  - name: mychart
+    version: "1.0.0"
+    repository: "oci://ghcr.io/charts"
+`
+	configPath := filepath.Join(t.TempDir(), "copa-config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
+
+	outputPath := filepath.Join(t.TempDir(), "results.json")
+	opts := &types.Options{
+		DryRun:            true,
+		Scanner:           "trivy",
+		PkgTypes:          "os",
+		LibraryPatchLevel: "patch",
+		OutputJSON:        outputPath,
+	}
+
+	err := PatchFromConfig(context.Background(), configPath, opts)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+
+	var results []patchJobResult
+	require.NoError(t, json.Unmarshal(data, &results))
+
+	require.Len(t, results, 1)
+	assert.Equal(t, "WouldPatch", results[0].Status)
+	assert.Equal(t, "redis:7.0", results[0].Source)
+	assert.Equal(t, "registry.io/myorg/redis:7.0-patched", results[0].Target)
+}
+
+func TestPatchFromConfig_DryRun_ChartsAndImages_Dedup(t *testing.T) {
+	// Chart discovers nginx:1.25.0, but explicit images list also has nginx — explicit wins.
+	origDownload := helm.DownloadChart
+	origRender := helm.RenderChart
+	t.Cleanup(func() {
+		helm.DownloadChart = origDownload
+		helm.RenderChart = origRender
+	})
+
+	helm.DownloadChart = func(name, version, repository string) (*helmchart.Chart, error) {
+		return &helmchart.Chart{Metadata: &helmchart.Metadata{Name: name, Version: version}}, nil
+	}
+	helm.RenderChart = func(ch *helmchart.Chart) (string, error) {
+		return `
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - image: docker.io/library/nginx:1.25.0
+        - image: redis:7.0
+`, nil
+	}
+
+	origListAllTags := listAllTags
+	t.Cleanup(func() { listAllTags = origListAllTags })
+	listAllTags = func(_ name.Repository) ([]string, error) { return []string{}, nil }
+
+	configContent := `
+apiVersion: copa.sh/v1alpha1
+kind: PatchConfig
+target:
+  registry: registry.io/myorg
+charts:
+  - name: mychart
+    version: "1.0.0"
+    repository: "oci://ghcr.io/charts"
+images:
+  - name: nginx-explicit
+    image: docker.io/library/nginx
+    tags:
+      strategy: list
+      list: ["1.26.0"]
+`
+	configPath := filepath.Join(t.TempDir(), "copa-config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
+
+	outputPath := filepath.Join(t.TempDir(), "results.json")
+	opts := &types.Options{
+		DryRun:            true,
+		Scanner:           "trivy",
+		PkgTypes:          "os",
+		LibraryPatchLevel: "patch",
+		OutputJSON:        outputPath,
+	}
+
+	err := PatchFromConfig(context.Background(), configPath, opts)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+
+	var results []patchJobResult
+	require.NoError(t, json.Unmarshal(data, &results))
+
+	// Should have 2 jobs: nginx:1.26.0 (explicit wins over chart's 1.25.0) + redis:7.0
+	require.Len(t, results, 2)
+
+	sources := make(map[string]string)
+	for _, r := range results {
+		sources[r.Source] = r.Target
+	}
+	// Explicit nginx:1.26.0 should be present, not chart's 1.25.0
+	assert.Contains(t, sources, "docker.io/library/nginx:1.26.0")
+	assert.NotContains(t, sources, "docker.io/library/nginx:1.25.0")
+	// Redis from chart should be present
+	assert.Contains(t, sources, "redis:7.0")
+}
+
+func TestPatchFromConfig_ValidationErrors(t *testing.T) {
+	tests := []struct {
+		name          string
+		configContent string
+		wantErrSubstr string
+	}{
+		{
+			name: "empty config (no charts, no images)",
+			configContent: `
+apiVersion: copa.sh/v1alpha1
+kind: PatchConfig
+`,
+			wantErrSubstr: "at least one chart or image",
+		},
+		{
+			name: "chart with invalid repository scheme",
+			configContent: `
+apiVersion: copa.sh/v1alpha1
+kind: PatchConfig
+charts:
+  - name: mychart
+    version: "1.0.0"
+    repository: "http://insecure.example.com"
+`,
+			wantErrSubstr: "repository must start with",
+		},
+		{
+			name: "override with empty from",
+			configContent: `
+apiVersion: copa.sh/v1alpha1
+kind: PatchConfig
+overrides:
+  myimage:
+    from: ""
+    to: "debian"
+images:
+  - name: nginx
+    image: nginx
+    tags:
+      strategy: list
+      list: ["1.25"]
+`,
+			wantErrSubstr: "from is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "copa-config.yaml")
+			require.NoError(t, os.WriteFile(configPath, []byte(tt.configContent), 0o600))
+
+			opts := &types.Options{DryRun: true, Scanner: "trivy", PkgTypes: "os", LibraryPatchLevel: "patch"}
+			err := PatchFromConfig(context.Background(), configPath, opts)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErrSubstr)
 		})
 	}
 }

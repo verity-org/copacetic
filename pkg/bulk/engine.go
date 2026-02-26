@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/hashicorp/go-multierror"
+	"github.com/project-copacetic/copacetic/pkg/helm"
 	"github.com/project-copacetic/copacetic/pkg/patch"
 	"github.com/project-copacetic/copacetic/pkg/types"
 	log "github.com/sirupsen/logrus"
@@ -95,6 +96,26 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 	}
 	if config.Kind != ExpectedKind {
 		return fmt.Errorf("invalid kind: expected '%s', but got '%s'", ExpectedKind, config.Kind)
+	}
+
+	if len(config.Charts) == 0 && len(config.Images) == 0 {
+		return fmt.Errorf("config must specify at least one chart or image")
+	}
+
+	if err := validateCharts(config.Charts); err != nil {
+		return fmt.Errorf("invalid chart config: %w", err)
+	}
+	if err := validateOverrides(config.Overrides); err != nil {
+		return fmt.Errorf("invalid overrides config: %w", err)
+	}
+
+	// Resolve chart images and merge with explicitly-listed images.
+	if len(config.Charts) > 0 {
+		chartImages, err := resolveChartImages(ctx, config.Charts, config.Overrides)
+		if err != nil {
+			return fmt.Errorf("failed to resolve chart images: %w", err)
+		}
+		config = mergeImageSpecs(config, chartImages)
 	}
 
 	log.Debug("Discovering all tags to calculate total job count...")
@@ -366,6 +387,102 @@ func resolveTargetTag(target TargetSpec, sourceTag string) (string, error) {
 	}
 
 	return builder.String(), nil
+}
+
+// resolveChartImages downloads and renders each Helm chart, extracts container
+// images from the rendered manifests, and converts them to ImageSpec entries
+// ready for the patch pipeline. Errors per chart are accumulated but non-fatal
+// (processing continues for remaining charts).
+func resolveChartImages(ctx context.Context, charts []ChartSpec, overrides map[string]OverrideSpec) ([]ImageSpec, error) {
+	var allImages []helm.ChartImage
+	var errs *multierror.Error
+
+	for _, chartSpec := range charts {
+		log.Infof("Downloading Helm chart '%s' v%s from %s...", chartSpec.Name, chartSpec.Version, chartSpec.Repository)
+		ch, err := helm.DownloadChart(chartSpec.Name, chartSpec.Version, chartSpec.Repository)
+		if err != nil {
+			errs = multierror.Append(errs, fmt.Errorf("chart '%s': %w", chartSpec.Name, err))
+			continue
+		}
+
+		// Convert bulk.OverrideSpec to helm.OverrideSpec
+		helmOverrides := toHelmOverrides(overrides)
+		images, err := helm.DiscoverChartImages(ch, helmOverrides)
+		if err != nil {
+			errs = multierror.Append(errs, fmt.Errorf("chart '%s': %w", chartSpec.Name, err))
+			continue
+		}
+
+		log.Infof("Found %d image(s) in chart '%s'", len(images), chartSpec.Name)
+		allImages = append(allImages, images...)
+	}
+
+	if errs.ErrorOrNil() != nil {
+		log.Warnf("Encountered errors resolving chart images:\n%s", errs.Error())
+	}
+
+	return chartImagesToSpecs(allImages), errs.ErrorOrNil()
+}
+
+// toHelmOverrides converts the bulk package's OverrideSpec map to the helm package's OverrideSpec map.
+func toHelmOverrides(overrides map[string]OverrideSpec) map[string]helm.OverrideSpec {
+	if overrides == nil {
+		return nil
+	}
+	result := make(map[string]helm.OverrideSpec, len(overrides))
+	for k, v := range overrides {
+		result[k] = helm.OverrideSpec{From: v.From, To: v.To}
+	}
+	return result
+}
+
+// chartImagesToSpecs converts helm.ChartImage entries to ImageSpec entries using
+// the "list" tag strategy with the exact pinned tag from the chart.
+func chartImagesToSpecs(images []helm.ChartImage) []ImageSpec {
+	specs := make([]ImageSpec, 0, len(images))
+	for _, img := range images {
+		specs = append(specs, ImageSpec{
+			Name:  img.Repository,
+			Image: img.Repository,
+			Tags: TagStrategy{
+				Strategy: StrategyList,
+				List:     []string{img.Tag},
+			},
+		})
+	}
+	return specs
+}
+
+// mergeImageSpecs merges chart-discovered ImageSpecs with the explicitly-listed ones.
+// Explicit images take precedence: if a chart image has the same repository as an
+// explicit image, the chart image is dropped. Returns a new PatchConfig (immutable).
+func mergeImageSpecs(config PatchConfig, chartImages []ImageSpec) PatchConfig {
+	// Build a set of explicit image repositories for deduplication.
+	explicitRefs := make(map[string]struct{}, len(config.Images))
+	for _, img := range config.Images {
+		explicitRefs[img.Image] = struct{}{}
+	}
+
+	merged := make([]ImageSpec, len(config.Images))
+	copy(merged, config.Images)
+
+	for _, chartImg := range chartImages {
+		if _, exists := explicitRefs[chartImg.Image]; exists {
+			log.Debugf("Skipping chart-discovered image '%s': overridden by explicit image spec", chartImg.Image)
+			continue
+		}
+		merged = append(merged, chartImg)
+		explicitRefs[chartImg.Image] = struct{}{} // prevent chart-to-chart duplicates
+	}
+
+	return PatchConfig{
+		APIVersion: config.APIVersion,
+		Kind:       config.Kind,
+		Target:     config.Target,
+		Charts:     config.Charts,
+		Overrides:  config.Overrides,
+		Images:     merged,
+	}
 }
 
 // printSummary prints a formatted summary table of all patch jobs.
