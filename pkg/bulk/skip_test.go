@@ -89,6 +89,95 @@ func TestDiscoverExistingPatchTags(t *testing.T) {
 	}
 }
 
+func TestDiscoverExistingPatchTags_ArchSuffixesExcluded(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseTag  string
+		allTags  []string
+		expected []string
+	}{
+		{
+			name:    "386 arch tag excluded (numeric arch collision)",
+			baseTag: "3.18.0-patched",
+			allTags: []string{"3.18.0-patched", "3.18.0-patched-386", "3.18.0-patched-amd64", "3.18.0-patched-arm64"},
+			expected: []string{"3.18.0-patched"},
+		},
+		{
+			name:    "versioned patch tag kept alongside arch tags",
+			baseTag: "3.18.0-patched",
+			allTags: []string{"3.18.0-patched", "3.18.0-patched-1", "3.18.0-patched-386", "3.18.0-patched-arm64"},
+			expected: []string{"3.18.0-patched", "3.18.0-patched-1"},
+		},
+		{
+			name:    "all known arch suffixes excluded",
+			baseTag: "1.0.0-patched",
+			allTags: []string{
+				"1.0.0-patched",
+				"1.0.0-patched-386",
+				"1.0.0-patched-amd64",
+				"1.0.0-patched-arm",
+				"1.0.0-patched-arm-v5",
+				"1.0.0-patched-arm-v6",
+				"1.0.0-patched-arm-v7",
+				"1.0.0-patched-arm64",
+				"1.0.0-patched-arm64-v8",
+				"1.0.0-patched-ppc64le",
+				"1.0.0-patched-s390x",
+				"1.0.0-patched-riscv64",
+			},
+			expected: []string{"1.0.0-patched"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldListAllTags := listAllTags
+			defer func() { listAllTags = oldListAllTags }()
+			listAllTags = func(repo name.Repository) ([]string, error) {
+				return tt.allTags, nil
+			}
+
+			result, err := discoverExistingPatchTags("registry.io/alpine", tt.baseTag)
+			require.NoError(t, err)
+			if len(tt.expected) == 0 {
+				assert.Empty(t, result)
+			} else {
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestIsArchSpecificTag(t *testing.T) {
+	tests := []struct {
+		tag      string
+		baseTag  string
+		expected bool
+	}{
+		{"3.18.0-patched-386", "3.18.0-patched", true},
+		{"3.18.0-patched-amd64", "3.18.0-patched", true},
+		{"3.18.0-patched-arm64", "3.18.0-patched", true},
+		{"3.18.0-patched-arm", "3.18.0-patched", true},
+		{"3.18.0-patched-arm-v7", "3.18.0-patched", true},
+		{"3.18.0-patched-ppc64le", "3.18.0-patched", true},
+		{"3.18.0-patched-s390x", "3.18.0-patched", true},
+		{"3.18.0-patched-riscv64", "3.18.0-patched", true},
+		// These are NOT arch tags — they should be treated as version tags
+		{"3.18.0-patched-1", "3.18.0-patched", false},
+		{"3.18.0-patched-10", "3.18.0-patched", false},
+		{"3.18.0-patched", "3.18.0-patched", false},
+		// Wrong base tag
+		{"3.18.0-patched-386", "3.18.0-fixed", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tag+"_base_"+tt.baseTag, func(t *testing.T) {
+			result := isArchSpecificTag(tt.tag, tt.baseTag)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestDiscoverExistingPatchTags_RegistryError(t *testing.T) {
 	// Mock listAllTags to return an error
 	oldListAllTags := listAllTags

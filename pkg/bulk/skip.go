@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/project-copacetic/copacetic/pkg/patch"
 	"github.com/project-copacetic/copacetic/pkg/report"
 	log "github.com/sirupsen/logrus"
 )
@@ -22,8 +23,21 @@ type skipCheckResult struct {
 	ResolvedTag string // The tag to use if NOT skipping (versioned)
 }
 
+// isArchSpecificTag reports whether tag is an architecture-specific variant of baseTag
+// (e.g. "3.18.0-patched-386" for baseTag "3.18.0-patched").
+// It checks against the suffixes derived from Copa's validPlatforms list.
+func isArchSpecificTag(tag, baseTag string) bool {
+	for _, suffix := range patch.ArchTagSuffixes() {
+		if tag == baseTag+"-"+suffix {
+			return true
+		}
+	}
+	return false
+}
+
 // discoverExistingPatchTags lists all tags in the repository that match the base tag pattern.
 // It returns tags matching either "<baseTag>" or "<baseTag>-N" where N is a number.
+// Architecture-specific tags (e.g. "<baseTag>-386") are excluded.
 func discoverExistingPatchTags(repo, baseTag string) ([]string, error) {
 	repository, err := name.NewRepository(repo)
 	if err != nil {
@@ -45,7 +59,7 @@ func discoverExistingPatchTags(repo, baseTag string) ([]string, error) {
 
 	var matching []string
 	for _, tag := range allTags {
-		if re.MatchString(tag) {
+		if re.MatchString(tag) && !isArchSpecificTag(tag, baseTag) {
 			matching = append(matching, tag)
 		}
 	}
