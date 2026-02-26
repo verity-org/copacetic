@@ -144,7 +144,7 @@ func deriveVenvRoot(pkgPath string) string {
 	}
 
 	prefix := p[:idx]
-	if prefix == "" {
+	if prefix == "" || prefix == "/" {
 		return ""
 	}
 
@@ -157,8 +157,57 @@ func deriveVenvRoot(pkgPath string) string {
 	return prefix
 }
 
+// isNestedSitePackage returns true when pkgPath points to a location inside
+// another package's directory rather than directly in site-packages.
+//
+// Trivy may report PkgPath in two forms:
+//   - Just the site-packages directory:   ".../site-packages"
+//   - A dist-info METADATA path:          ".../site-packages/pkg-1.0.dist-info/METADATA"
+//   - A vendored dist-info path:          ".../site-packages/setuptools/_vendor/pkg-1.0.dist-info/METADATA"
+//
+// The first and second forms are top-level packages that pip can patch directly.
+// The third form is a vendored copy embedded inside another package's directory;
+// pip install targets the top-level site-packages and cannot fix these.
+//
+// Detection rule: after stripping the ".../site-packages/" prefix, if the first
+// path component does NOT end in ".dist-info" or ".egg-info", the path goes through
+// another package's directory first and is therefore a nested (vendored) location.
+func isNestedSitePackage(pkgPath string) bool {
+	if pkgPath == "" {
+		return false
+	}
+	p := pkgPath
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	const sitePackagesSuffix = "/site-packages"
+	idx := strings.Index(p, sitePackagesSuffix)
+	if idx == -1 {
+		return false
+	}
+	rest := strings.TrimPrefix(p[idx+len(sitePackagesSuffix):], "/")
+	if rest == "" {
+		return false // exactly at site-packages, not nested
+	}
+	// Check the first component after site-packages/.
+	firstComponent := rest
+	if i := strings.Index(rest, "/"); i != -1 {
+		firstComponent = rest[:i]
+	}
+	// A dist-info or egg-info directory directly under site-packages means the
+	// package is at the top level — it is patchable by pip.
+	if strings.HasSuffix(firstComponent, ".dist-info") || strings.HasSuffix(firstComponent, ".egg-info") {
+		return false
+	}
+	// The first component is a package directory (e.g. "setuptools"), meaning
+	// the path descends into another package's tree — this is a vendored copy.
+	return true
+}
+
 // groupPackagesByEnv separates packages into those belonging to the system Python
 // installation and those residing in virtual environments.
+// Packages whose PkgPath points inside another package's directory (vendored
+// copies) are skipped with a warning — pip cannot patch them independently.
 // Returns:
 //   - system: packages with no PkgPath or a system site-packages PkgPath
 //   - venvs: map from venv root (e.g. "/opt/venv") to the packages found there
@@ -168,6 +217,15 @@ func groupPackagesByEnv(updates unversioned.LangUpdatePackages) (
 ) {
 	venvs = make(map[string]unversioned.LangUpdatePackages)
 	for _, pkg := range updates {
+		if isNestedSitePackage(pkg.PkgPath) {
+			log.Warnf(
+				"Skipping %s@%s: path %q is inside another package's directory — "+
+					"vendored copies cannot be independently patched via pip; "+
+					"update the parent package instead",
+				pkg.Name, pkg.InstalledVersion, pkg.PkgPath,
+			)
+			continue
+		}
 		root := deriveVenvRoot(pkg.PkgPath)
 		if root == "" {
 			system = append(system, pkg)
@@ -579,15 +637,15 @@ func (pm *pythonManager) installPythonPackagesWithPip(currentState *llb.State, p
 		return *currentState
 	}
 	if ignoreErrors {
-		var installCommands []string
-		for _, spec := range packageSpecs {
-			installCommands = append(installCommands,
-				fmt.Sprintf(`%s install --timeout %d '%s' || printf "WARN: pip install failed for %s\n"`,
-					pipPath, defaultPipInstallTimeoutSeconds, spec, spec))
-		}
-		installCmd := fmt.Sprintf(`sh -c '%s'`, strings.Join(installCommands, "; "))
+		// Pass pipPath as $1 and each package spec as subsequent positional args to prevent
+		// shell injection from pipPath being interpolated into the command string.
+		script := fmt.Sprintf(
+			`pip="$1"; shift; for s in "$@"; do "$pip" install --timeout %d "$s" || printf "WARN: pip install failed for %%s\n" "$s"; done`,
+			defaultPipInstallTimeoutSeconds)
+		args := []string{"sh", "-c", script, "copa-install", pipPath}
+		args = append(args, packageSpecs...)
 		return currentState.Run(
-			llb.Shlex(installCmd),
+			llb.Args(args),
 			llb.WithProxy(buildkit.GetProxy()),
 		).Root()
 	}
@@ -707,9 +765,15 @@ func (pm *pythonManager) upgradeVenvPackagesWithTooling(
 	toolingImage := fmt.Sprintf(toolingImageTemplate, toolingTag)
 	log.Infof("Using tooling image %s for venv %s", toolingImage, venvRoot)
 
-	toolingInstallCmd := fmt.Sprintf("sh -c 'pip install --no-cache-dir --disable-pip-version-check --no-deps --target /copa-pkgs %s'", strings.Join(installPkgSpecs, " "))
+	// Use llb.Args to avoid shell interpolation of package specs.
+	pipInstallArgs := []string{
+		"pip", "install",
+		"--no-cache-dir", "--disable-pip-version-check", "--no-deps",
+		"--target", "/copa-pkgs",
+	}
+	pipInstallArgs = append(pipInstallArgs, installPkgSpecs...)
 	toolingState := llb.Image(toolingImage).Run(
-		llb.Shlex(toolingInstallCmd),
+		llb.Args(pipInstallArgs),
 		llb.WithProxy(buildkit.GetProxy()),
 	).Root()
 
@@ -720,9 +784,12 @@ func (pm *pythonManager) upgradeVenvPackagesWithTooling(
 		name := strings.ToLower(strings.ReplaceAll(parts[0], "_", "-"))
 		pkgBaseNames = append(pkgBaseNames, name)
 	}
-	cleanScript := fmt.Sprintf(`sh -c 'sp="%s"; for p in %s; do rm -rf "$sp/$p" 2>/dev/null || true; for d in $sp/$p-*.dist-info; do [ -d "$d" ] && rm -rf "$d" || true; done; done'`,
-		sitePkgsPath, strings.Join(pkgBaseNames, " "))
-	cleaned := currentState.Run(llb.Shlex(cleanScript)).Root()
+	// Pass sitePkgsPath as $1 and package base names as subsequent positional args to
+	// prevent injection from sitePkgsPath being interpolated into the shell command.
+	cleanScript := `sp="$1"; shift; for p in "$@"; do rm -rf "$sp/$p" 2>/dev/null || true; for d in "$sp/$p"-*.dist-info; do [ -d "$d" ] && rm -rf "$d" || true; done; done`
+	cleanArgs := []string{"sh", "-c", cleanScript, "clean-script", sitePkgsPath}
+	cleanArgs = append(cleanArgs, pkgBaseNames...)
+	cleaned := currentState.Run(llb.Args(cleanArgs)).Root()
 
 	merged := cleaned.File(
 		llb.Copy(toolingState, "/copa-pkgs/", sitePkgsPath+"/", &llb.CopyInfo{CopyDirContentsOnly: true, CreateDestPath: true}),
