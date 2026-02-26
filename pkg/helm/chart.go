@@ -3,6 +3,7 @@ package helm
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -97,14 +98,10 @@ var RenderChart = func(ch *helmchart.Chart) (string, error) {
 	install.ReleaseName = ch.Metadata.Name
 	install.Namespace = "default"
 	install.IncludeCRDs = true
-	// Use a recent Kubernetes version so charts with a high kubeVersion
-	// constraint (e.g. >=1.25.0) don't fail the compatibility check.
+	// Use the Kubernetes version matching our k8s.io/apimachinery dependency so
+	// charts with a high kubeVersion constraint (e.g. >=1.25.0) don't fail.
 	// ClientOnly mode defaults to v1.20.0 via chartutil.DefaultCapabilities.
-	install.KubeVersion = &chartutil.KubeVersion{
-		Version: "v1.32.0",
-		Major:   "1",
-		Minor:   "32",
-	}
+	install.KubeVersion = kubeVersionFromBuildDeps()
 
 	release, err := install.Run(ch, map[string]interface{}{})
 	if err != nil {
@@ -112,6 +109,43 @@ var RenderChart = func(ch *helmchart.Chart) (string, error) {
 	}
 
 	return release.Manifest, nil
+}
+
+// kubeVersionFromBuildDeps derives the Kubernetes version from the k8s.io/apimachinery
+// module version embedded in the binary's build info.
+// k8s.io/apimachinery follows the convention v0.{MINOR}.{PATCH} = K8s 1.{MINOR}.{PATCH}.
+// Falls back to v1.32.0 if build info is unavailable or the module is not found.
+func kubeVersionFromBuildDeps() *chartutil.KubeVersion {
+	const fallbackVersion = "v1.32.0"
+	const fallbackMinor = "32"
+
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		log.Debugf("helm: build info unavailable, using fallback KubeVersion %s", fallbackVersion)
+		return &chartutil.KubeVersion{Version: fallbackVersion, Major: "1", Minor: fallbackMinor}
+	}
+
+	for _, dep := range info.Deps {
+		if dep.Path != "k8s.io/apimachinery" {
+			continue
+		}
+		v := dep.Version // e.g. "v0.35.1"
+		rest, ok := strings.CutPrefix(v, "v0.")
+		if !ok {
+			break
+		}
+		parts := strings.SplitN(rest, ".", 2)
+		if len(parts) != 2 {
+			break
+		}
+		minor, patch := parts[0], parts[1]
+		kubeVer := fmt.Sprintf("v1.%s.%s", minor, patch)
+		log.Debugf("helm: derived KubeVersion %s from k8s.io/apimachinery %s", kubeVer, v)
+		return &chartutil.KubeVersion{Version: kubeVer, Major: "1", Minor: minor}
+	}
+
+	log.Debugf("helm: k8s.io/apimachinery not found in build deps, using fallback KubeVersion %s", fallbackVersion)
+	return &chartutil.KubeVersion{Version: fallbackVersion, Major: "1", Minor: fallbackMinor}
 }
 
 // DiscoverChartImages downloads, renders, and extracts all container images
