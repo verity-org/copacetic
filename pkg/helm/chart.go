@@ -10,6 +10,7 @@ import (
 	helmchart "helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	helmcli "helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/chartutil"
 	helmregistry "helm.sh/helm/v3/pkg/registry"
 )
 
@@ -96,6 +97,14 @@ var RenderChart = func(ch *helmchart.Chart) (string, error) {
 	install.ReleaseName = ch.Metadata.Name
 	install.Namespace = "default"
 	install.IncludeCRDs = true
+	// Use a recent Kubernetes version so charts with a high kubeVersion
+	// constraint (e.g. >=1.25.0) don't fail the compatibility check.
+	// ClientOnly mode defaults to v1.20.0 via chartutil.DefaultCapabilities.
+	install.KubeVersion = &chartutil.KubeVersion{
+		Version: "v1.32.0",
+		Major:   "1",
+		Minor:   "32",
+	}
 
 	release, err := install.Run(ch, map[string]interface{}{})
 	if err != nil {
