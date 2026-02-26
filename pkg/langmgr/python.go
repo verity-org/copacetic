@@ -144,7 +144,7 @@ func deriveVenvRoot(pkgPath string) string {
 	}
 
 	prefix := p[:idx]
-	if prefix == "" {
+	if prefix == "" || prefix == "/" {
 		return ""
 	}
 
@@ -579,15 +579,15 @@ func (pm *pythonManager) installPythonPackagesWithPip(currentState *llb.State, p
 		return *currentState
 	}
 	if ignoreErrors {
-		var installCommands []string
-		for _, spec := range packageSpecs {
-			installCommands = append(installCommands,
-				fmt.Sprintf(`%s install --timeout %d '%s' || printf "WARN: pip install failed for %s\n"`,
-					pipPath, defaultPipInstallTimeoutSeconds, spec, spec))
-		}
-		installCmd := fmt.Sprintf(`sh -c '%s'`, strings.Join(installCommands, "; "))
+		// Pass pipPath as $1 and each package spec as subsequent positional args to prevent
+		// shell injection from pipPath being interpolated into the command string.
+		script := fmt.Sprintf(
+			`pip="$1"; shift; for s in "$@"; do "$pip" install --timeout %d "$s" || printf "WARN: pip install failed for %%s\n" "$s"; done`,
+			defaultPipInstallTimeoutSeconds)
+		args := []string{"sh", "-c", script, "copa-install", pipPath}
+		args = append(args, packageSpecs...)
 		return currentState.Run(
-			llb.Shlex(installCmd),
+			llb.Args(args),
 			llb.WithProxy(utils.GetProxy()),
 		).Root()
 	}
@@ -707,9 +707,15 @@ func (pm *pythonManager) upgradeVenvPackagesWithTooling(
 	toolingImage := fmt.Sprintf(toolingImageTemplate, toolingTag)
 	log.Infof("Using tooling image %s for venv %s", toolingImage, venvRoot)
 
-	toolingInstallCmd := fmt.Sprintf("sh -c 'pip install --no-cache-dir --disable-pip-version-check --no-deps --target /copa-pkgs %s'", strings.Join(installPkgSpecs, " "))
+	// Use llb.Args to avoid shell interpolation of package specs.
+	pipInstallArgs := []string{
+		"pip", "install",
+		"--no-cache-dir", "--disable-pip-version-check", "--no-deps",
+		"--target", "/copa-pkgs",
+	}
+	pipInstallArgs = append(pipInstallArgs, installPkgSpecs...)
 	toolingState := llb.Image(toolingImage).Run(
-		llb.Shlex(toolingInstallCmd),
+		llb.Args(pipInstallArgs),
 		llb.WithProxy(utils.GetProxy()),
 	).Root()
 
@@ -720,9 +726,12 @@ func (pm *pythonManager) upgradeVenvPackagesWithTooling(
 		name := strings.ToLower(strings.ReplaceAll(parts[0], "_", "-"))
 		pkgBaseNames = append(pkgBaseNames, name)
 	}
-	cleanScript := fmt.Sprintf(`sh -c 'sp="%s"; for p in %s; do rm -rf "$sp/$p" 2>/dev/null || true; for d in $sp/$p-*.dist-info; do [ -d "$d" ] && rm -rf "$d" || true; done; done'`,
-		sitePkgsPath, strings.Join(pkgBaseNames, " "))
-	cleaned := currentState.Run(llb.Shlex(cleanScript)).Root()
+	// Pass sitePkgsPath as $1 and package base names as subsequent positional args to
+	// prevent injection from sitePkgsPath being interpolated into the shell command.
+	cleanScript := `sp="$1"; shift; for p in "$@"; do rm -rf "$sp/$p" 2>/dev/null || true; for d in "$sp/$p"-*.dist-info; do [ -d "$d" ] && rm -rf "$d" || true; done; done`
+	cleanArgs := []string{"sh", "-c", cleanScript, "clean-script", sitePkgsPath}
+	cleanArgs = append(cleanArgs, pkgBaseNames...)
+	cleaned := currentState.Run(llb.Args(cleanArgs)).Root()
 
 	merged := cleaned.File(
 		llb.Copy(toolingState, "/copa-pkgs/", sitePkgsPath+"/", &llb.CopyInfo{CopyDirContentsOnly: true, CreateDestPath: true}),

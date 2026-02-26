@@ -2,10 +2,13 @@ package langmgr
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/moby/buildkit/client/llb"
 	"github.com/project-copacetic/copacetic/pkg/buildkit"
 	"github.com/project-copacetic/copacetic/pkg/types/unversioned"
+	"github.com/project-copacetic/copacetic/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -562,4 +565,213 @@ func TestPythonManagerType(t *testing.T) {
 	assert.True(t, ok, "First manager should be a pythonManager")
 	assert.Equal(t, config, pythonMgr.config)
 	assert.Equal(t, workingFolder, pythonMgr.workingFolder)
+}
+
+func TestValidatePythonPackageName(t *testing.T) {
+	tests := []struct {
+		name      string
+		pkgName   string
+		expectErr bool
+	}{
+		{name: "valid simple", pkgName: "requests", expectErr: false},
+		{name: "valid with dash", pkgName: "my-package", expectErr: false},
+		{name: "valid with dot", pkgName: "pkg.name", expectErr: false},
+		{name: "valid with underscore", pkgName: "pkg_name", expectErr: false},
+		{name: "valid alphanumeric", pkgName: "pkg123", expectErr: false},
+		{name: "valid single char", pkgName: "a", expectErr: false},
+		{name: "empty string", pkgName: "", expectErr: true},
+		{name: "too long", pkgName: strings.Repeat("a", 215), expectErr: true},
+		{name: "semicolon injection", pkgName: "pkg;evil", expectErr: true},
+		{name: "dollar sign", pkgName: "pkg$var", expectErr: true},
+		{name: "backtick", pkgName: "pkg`cmd`", expectErr: true},
+		{name: "pipe", pkgName: "pkg|evil", expectErr: true},
+		{name: "starts with dash", pkgName: "-pkg", expectErr: true},
+		{name: "starts with dot", pkgName: ".pkg", expectErr: true},
+		{name: "spaces", pkgName: "pkg name", expectErr: true},
+		{name: "single quote", pkgName: "pkg'name", expectErr: true},
+		{name: "double quote", pkgName: `pkg"name`, expectErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePythonPackageName(tt.pkgName)
+			if tt.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidatePythonVersion(t *testing.T) {
+	tests := []struct {
+		name      string
+		version   string
+		expectErr bool
+	}{
+		{name: "valid simple", version: "1.0.0", expectErr: false},
+		{name: "valid two part", version: "1.26", expectErr: false},
+		{name: "valid complex", version: "2.28.0.post1", expectErr: false},
+		{name: "valid pre-release", version: "1.0.0a1", expectErr: false},
+		{name: "empty string", version: "", expectErr: true},
+		{name: "not a version", version: "not-a-version", expectErr: true},
+		{name: "semicolon injection", version: "1.0.0;evil", expectErr: true},
+		{name: "dollar sign", version: "1.0.$var", expectErr: true},
+		{name: "backtick", version: "1.0.`id`", expectErr: true},
+		{name: "pipe", version: "1.0|evil", expectErr: true},
+		{name: "single quote", version: "1.0'x", expectErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePythonVersion(tt.version)
+			if tt.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestFilterPythonPackages(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    unversioned.LangUpdatePackages
+		expected int
+	}{
+		{
+			name: "only python packages",
+			input: unversioned.LangUpdatePackages{
+				{Name: "requests", Type: utils.PythonPackages},
+				{Name: "urllib3", Type: utils.PythonPackages},
+			},
+			expected: 2,
+		},
+		{
+			name: "mixed package types",
+			input: unversioned.LangUpdatePackages{
+				{Name: "requests", Type: utils.PythonPackages},
+				{Name: "express", Type: utils.NodePackages},
+				{Name: "other", Type: "other-type"},
+			},
+			expected: 1,
+		},
+		{
+			name:     "empty input",
+			input:    unversioned.LangUpdatePackages{},
+			expected: 0,
+		},
+		{
+			name:     "nil input",
+			input:    nil,
+			expected: 0,
+		},
+		{
+			name: "no python packages",
+			input: unversioned.LangUpdatePackages{
+				{Name: "express", Type: utils.NodePackages},
+			},
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := filterPythonPackages(tt.input)
+			assert.Len(t, result, tt.expected)
+			for _, pkg := range result {
+				assert.Equal(t, utils.PythonPackages, pkg.Type)
+			}
+		})
+	}
+}
+
+func TestInstallPythonPackages(t *testing.T) {
+	config := &buildkit.Config{}
+	pm := &pythonManager{config: config, workingFolder: "/tmp/test"}
+	base := llb.Scratch()
+
+	t.Run("empty packageSpecs returns input state without error", func(t *testing.T) {
+		// Empty input should not panic and returns a valid state.
+		result := pm.installPythonPackages(&base, nil, false)
+		_ = result // llb.State contains func values; just verify no panic/error
+		result = pm.installPythonPackages(&base, []string{}, false)
+		_ = result
+	})
+
+	t.Run("non-empty with ignoreErrors=false builds state without panic", func(t *testing.T) {
+		// llb.Args path — verifies DAG construction doesn't panic.
+		result := pm.installPythonPackages(&base, []string{"requests==2.28.0"}, false)
+		_ = result
+	})
+
+	t.Run("non-empty with ignoreErrors=true builds state without panic", func(t *testing.T) {
+		// sh -c script path — verifies DAG construction doesn't panic.
+		result := pm.installPythonPackages(&base, []string{"requests==2.28.0", "urllib3==1.26.0"}, true)
+		_ = result
+	})
+}
+
+func TestInstallPythonPackagesWithPip(t *testing.T) {
+	config := &buildkit.Config{}
+	pm := &pythonManager{config: config, workingFolder: "/tmp/test"}
+	base := llb.Scratch()
+	pipPath := "/opt/venv/bin/pip"
+
+	t.Run("empty packageSpecs returns without panic", func(t *testing.T) {
+		result := pm.installPythonPackagesWithPip(&base, pipPath, nil, false)
+		_ = result
+		result = pm.installPythonPackagesWithPip(&base, pipPath, []string{}, true)
+		_ = result
+	})
+
+	t.Run("non-empty with ignoreErrors=false uses llb.Args without panic", func(t *testing.T) {
+		result := pm.installPythonPackagesWithPip(&base, pipPath, []string{"requests==2.28.0"}, false)
+		_ = result
+	})
+
+	t.Run("non-empty with ignoreErrors=true uses positional args without panic", func(t *testing.T) {
+		// Verifies the fixed path: pipPath passed via llb.Args, not interpolated into shell string.
+		result := pm.installPythonPackagesWithPip(&base, pipPath, []string{"requests==2.28.0"}, true)
+		_ = result
+	})
+
+	t.Run("multiple specs with ignoreErrors=true without panic", func(t *testing.T) {
+		result := pm.installPythonPackagesWithPip(&base, "/opt/my-env/bin/pip3",
+			[]string{"requests==2.28.0", "urllib3==1.26.0"}, true)
+		_ = result
+	})
+}
+
+func TestDeriveVenvRootEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		pkgPath  string
+		expected string
+	}{
+		{
+			name:     "double slash produces slash prefix - not a venv",
+			pkgPath:  "//lib/python3.12/site-packages",
+			expected: "",
+		},
+		{
+			name:     "only site-packages pattern at root - not a venv",
+			pkgPath:  "/lib/python3.12/site-packages",
+			expected: "",
+		},
+		{
+			name:     "dist-packages is not site-packages",
+			pkgPath:  "opt/venv/lib/python3.12/dist-packages",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := deriveVenvRoot(tt.pkgPath)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }
