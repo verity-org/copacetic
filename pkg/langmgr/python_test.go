@@ -334,6 +334,207 @@ func TestValidatePythonPackageVersions(t *testing.T) {
 	}
 }
 
+func TestValidateVenvRoot(t *testing.T) {
+	tests := []struct {
+		name      string
+		venvRoot  string
+		expectErr bool
+	}{
+		{name: "valid opt venv", venvRoot: "/opt/venv", expectErr: false},
+		{name: "valid app dotenv", venvRoot: "/app/.venv", expectErr: false},
+		{name: "valid home venv", venvRoot: "/home/user/venv", expectErr: false},
+		{name: "empty string", venvRoot: "", expectErr: true},
+		{name: "relative path", venvRoot: "opt/venv", expectErr: true},
+		{name: "dollar sign injection", venvRoot: "/opt/$(touch /pwned)", expectErr: true},
+		{name: "semicolon injection", venvRoot: "/opt/venv; rm -rf /", expectErr: true},
+		{name: "backtick injection", venvRoot: "/opt/`id`", expectErr: true},
+		{name: "single quote injection", venvRoot: "/opt/v'env", expectErr: true},
+		{name: "double quote injection", venvRoot: `/opt/v"env`, expectErr: true},
+		{name: "space in path", venvRoot: "/opt/my venv", expectErr: true},
+		{name: "pipe injection", venvRoot: "/opt/venv|evil", expectErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateVenvRoot(tt.venvRoot)
+			if tt.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestDeriveVenvRoot(t *testing.T) {
+	tests := []struct {
+		name     string
+		pkgPath  string
+		expected string
+	}{
+		{
+			name:     "venv at /opt/venv",
+			pkgPath:  "opt/venv/lib/python3.12/site-packages",
+			expected: "/opt/venv",
+		},
+		{
+			name:     "venv at /opt/venv with trailing subpath",
+			pkgPath:  "opt/venv/lib/python3.12/site-packages/jaraco.context/",
+			expected: "/opt/venv",
+		},
+		{
+			name:     "venv at /app/.venv",
+			pkgPath:  "app/.venv/lib/python3.11/site-packages",
+			expected: "/app/.venv",
+		},
+		{
+			name:     "venv at /home/user/venv",
+			pkgPath:  "home/user/venv/lib/python3.9/site-packages",
+			expected: "/home/user/venv",
+		},
+		{
+			name:     "system path usr/local is not a venv",
+			pkgPath:  "usr/local/lib/python3.12/site-packages",
+			expected: "",
+		},
+		{
+			name:     "system path usr/lib is not a venv",
+			pkgPath:  "usr/lib/python3/dist-packages",
+			expected: "",
+		},
+		{
+			name:     "Azure CLI system path is not a venv",
+			pkgPath:  "usr/lib/az/lib/python3.12/site-packages",
+			expected: "",
+		},
+		{
+			name:     "empty path",
+			pkgPath:  "",
+			expected: "",
+		},
+		{
+			name:     "path with no site-packages pattern",
+			pkgPath:  "some/random/path",
+			expected: "",
+		},
+		{
+			name:     "with leading slash",
+			pkgPath:  "/opt/venv/lib/python3.12/site-packages",
+			expected: "/opt/venv",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := deriveVenvRoot(tt.pkgPath)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestGroupPackagesByEnv(t *testing.T) {
+	tests := []struct {
+		name           string
+		updates        unversioned.LangUpdatePackages
+		expectedSystem unversioned.LangUpdatePackages
+		expectedVenvs  map[string]unversioned.LangUpdatePackages
+	}{
+		{
+			name: "all system packages",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "requests", FixedVersion: "2.28.0", PkgPath: "usr/lib/python3.12/site-packages"},
+				{Name: "urllib3", FixedVersion: "1.26.0", PkgPath: "usr/local/lib/python3.12/site-packages"},
+			},
+			expectedSystem: unversioned.LangUpdatePackages{
+				{Name: "requests", FixedVersion: "2.28.0", PkgPath: "usr/lib/python3.12/site-packages"},
+				{Name: "urllib3", FixedVersion: "1.26.0", PkgPath: "usr/local/lib/python3.12/site-packages"},
+			},
+			expectedVenvs: map[string]unversioned.LangUpdatePackages{},
+		},
+		{
+			name: "all venv packages",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "pip", FixedVersion: "24.0", PkgPath: "opt/venv/lib/python3.12/site-packages"},
+				{Name: "wheel", FixedVersion: "0.43.0", PkgPath: "opt/venv/lib/python3.12/site-packages"},
+			},
+			expectedSystem: unversioned.LangUpdatePackages{},
+			expectedVenvs: map[string]unversioned.LangUpdatePackages{
+				"/opt/venv": {
+					{Name: "pip", FixedVersion: "24.0", PkgPath: "opt/venv/lib/python3.12/site-packages"},
+					{Name: "wheel", FixedVersion: "0.43.0", PkgPath: "opt/venv/lib/python3.12/site-packages"},
+				},
+			},
+		},
+		{
+			name: "mixed system and venv",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "requests", FixedVersion: "2.28.0", PkgPath: "usr/lib/python3.12/site-packages"},
+				{Name: "pip", FixedVersion: "24.0", PkgPath: "opt/venv/lib/python3.12/site-packages"},
+			},
+			expectedSystem: unversioned.LangUpdatePackages{
+				{Name: "requests", FixedVersion: "2.28.0", PkgPath: "usr/lib/python3.12/site-packages"},
+			},
+			expectedVenvs: map[string]unversioned.LangUpdatePackages{
+				"/opt/venv": {
+					{Name: "pip", FixedVersion: "24.0", PkgPath: "opt/venv/lib/python3.12/site-packages"},
+				},
+			},
+		},
+		{
+			name: "two different venvs",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "pip", FixedVersion: "24.0", PkgPath: "opt/venv/lib/python3.12/site-packages"},
+				{Name: "requests", FixedVersion: "2.28.0", PkgPath: "app/.venv/lib/python3.11/site-packages"},
+			},
+			expectedSystem: unversioned.LangUpdatePackages{},
+			expectedVenvs: map[string]unversioned.LangUpdatePackages{
+				"/opt/venv": {
+					{Name: "pip", FixedVersion: "24.0", PkgPath: "opt/venv/lib/python3.12/site-packages"},
+				},
+				"/app/.venv": {
+					{Name: "requests", FixedVersion: "2.28.0", PkgPath: "app/.venv/lib/python3.11/site-packages"},
+				},
+			},
+		},
+		{
+			name: "same package at system AND venv - one in each group",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "pip", FixedVersion: "24.0", PkgPath: "usr/lib/python3.12/site-packages"},
+				{Name: "pip", FixedVersion: "24.0", PkgPath: "opt/venv/lib/python3.12/site-packages"},
+			},
+			expectedSystem: unversioned.LangUpdatePackages{
+				{Name: "pip", FixedVersion: "24.0", PkgPath: "usr/lib/python3.12/site-packages"},
+			},
+			expectedVenvs: map[string]unversioned.LangUpdatePackages{
+				"/opt/venv": {
+					{Name: "pip", FixedVersion: "24.0", PkgPath: "opt/venv/lib/python3.12/site-packages"},
+				},
+			},
+		},
+		{
+			name: "empty PkgPath goes to system group",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "requests", FixedVersion: "2.28.0"},
+			},
+			expectedSystem: unversioned.LangUpdatePackages{
+				{Name: "requests", FixedVersion: "2.28.0"},
+			},
+			expectedVenvs: map[string]unversioned.LangUpdatePackages{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			system, venvs := groupPackagesByEnv(tt.updates)
+			assert.ElementsMatch(t, tt.expectedSystem, system)
+			assert.Equal(t, len(tt.expectedVenvs), len(venvs))
+			for venvRoot, expectedPkgs := range tt.expectedVenvs {
+				assert.ElementsMatch(t, expectedPkgs, venvs[venvRoot])
+			}
+		})
+	}
+}
+
 func TestPythonManagerType(t *testing.T) {
 	config := &buildkit.Config{}
 	workingFolder := "/tmp/test"
