@@ -97,15 +97,15 @@ func TestDiscoverExistingPatchTags_ArchSuffixesExcluded(t *testing.T) {
 		expected []string
 	}{
 		{
-			name:    "386 arch tag excluded (numeric arch collision)",
-			baseTag: "3.18.0-patched",
-			allTags: []string{"3.18.0-patched", "3.18.0-patched-386", "3.18.0-patched-amd64", "3.18.0-patched-arm64"},
+			name:     "386 arch tag excluded (numeric arch collision)",
+			baseTag:  "3.18.0-patched",
+			allTags:  []string{"3.18.0-patched", "3.18.0-patched-386", "3.18.0-patched-amd64", "3.18.0-patched-arm64"},
 			expected: []string{"3.18.0-patched"},
 		},
 		{
-			name:    "versioned patch tag kept alongside arch tags",
-			baseTag: "3.18.0-patched",
-			allTags: []string{"3.18.0-patched", "3.18.0-patched-1", "3.18.0-patched-386", "3.18.0-patched-arm64"},
+			name:     "versioned patch tag kept alongside arch tags",
+			baseTag:  "3.18.0-patched",
+			allTags:  []string{"3.18.0-patched", "3.18.0-patched-1", "3.18.0-patched-386", "3.18.0-patched-arm64"},
 			expected: []string{"3.18.0-patched", "3.18.0-patched-1"},
 		},
 		{
