@@ -524,6 +524,24 @@ func TestGroupPackagesByEnv(t *testing.T) {
 			},
 			expectedVenvs: map[string]unversioned.LangUpdatePackages{},
 		},
+		{
+			name: "vendored package is skipped, top-level dist-info path is kept",
+			updates: unversioned.LangUpdatePackages{
+				// Top-level package reported via dist-info METADATA path — patchable, keep it.
+				{Name: "pip", InstalledVersion: "25.3", FixedVersion: "26.0",
+					PkgPath: "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA"},
+				// Vendored copy inside setuptools — skip it.
+				{Name: "wheel", InstalledVersion: "0.45.1", FixedVersion: "0.46.2",
+					PkgPath: "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA"},
+			},
+			expectedSystem: unversioned.LangUpdatePackages{},
+			expectedVenvs: map[string]unversioned.LangUpdatePackages{
+				"/app/.venv": {
+					{Name: "pip", InstalledVersion: "25.3", FixedVersion: "26.0",
+						PkgPath: "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA"},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -743,6 +761,72 @@ func TestInstallPythonPackagesWithPip(t *testing.T) {
 			[]string{"requests==2.28.0", "urllib3==1.26.0"}, true)
 		_ = result
 	})
+}
+
+func TestIsNestedSitePackage(t *testing.T) {
+	tests := []struct {
+		name     string
+		pkgPath  string
+		expected bool
+	}{
+		{
+			name:     "empty path",
+			pkgPath:  "",
+			expected: false,
+		},
+		{
+			name:     "top-level site-packages directory only",
+			pkgPath:  "app/.venv/lib/python3.14/site-packages",
+			expected: false,
+		},
+		{
+			name:     "top-level site-packages with trailing slash",
+			pkgPath:  "app/.venv/lib/python3.14/site-packages/",
+			expected: false,
+		},
+		{
+			name:     "package's own dist-info directly under site-packages (trivy METADATA path format)",
+			pkgPath:  "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA",
+			expected: false,
+		},
+		{
+			name:     "system package dist-info directly under site-packages",
+			pkgPath:  "usr/local/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA",
+			expected: false,
+		},
+		{
+			name:     "egg-info directly under site-packages",
+			pkgPath:  "usr/local/lib/python3.11/site-packages/requests-2.28.0.egg-info",
+			expected: false,
+		},
+		{
+			name:     "vendored copy inside setuptools _vendor",
+			pkgPath:  "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA",
+			expected: true,
+		},
+		{
+			name:     "vendored copy inside pip _vendor",
+			pkgPath:  "app/.venv/lib/python3.12/site-packages/pip/_vendor/requests-2.28.0.dist-info/METADATA",
+			expected: true,
+		},
+		{
+			name:     "nested package in another package subdirectory",
+			pkgPath:  "usr/local/lib/python3.11/site-packages/some_pkg/bundled/certifi-2021.10.8.dist-info",
+			expected: true,
+		},
+		{
+			name:     "system path with no site-packages segment",
+			pkgPath:  "usr/lib/python3.11/dist-packages",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isNestedSitePackage(tt.pkgPath)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }
 
 func TestDeriveVenvRootEdgeCases(t *testing.T) {
