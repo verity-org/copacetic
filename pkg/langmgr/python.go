@@ -369,7 +369,7 @@ func (pm *pythonManager) InstallUpdates(
 	// Further partition system packages: those whose PkgPath explicitly names a
 	// site-packages directory use the targeted tooling strategy (exact --target path),
 	// because a plain "pip install" may resolve to a different location when sys.path
-	// has been customised by the image (e.g. a venv shadows /usr/local/).
+	// has been customized by the image (e.g. a venv shadows /usr/local/).
 	// Packages with a bare directory PkgPath or no PkgPath use the generic pip path.
 	explicitSiteMap := make(map[string]unversioned.LangUpdatePackages)
 	var explicitSiteDirs []string // sorted for deterministic ordering
