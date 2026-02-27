@@ -355,6 +355,8 @@ func TestValidateVenvRoot(t *testing.T) {
 		{name: "double quote injection", venvRoot: `/opt/v"env`, expectErr: true},
 		{name: "space in path", venvRoot: "/opt/my venv", expectErr: true},
 		{name: "pipe injection", venvRoot: "/opt/venv|evil", expectErr: true},
+		{name: "path traversal dotdot", venvRoot: "/opt/venv/../../etc", expectErr: true},
+		{name: "path traversal at start", venvRoot: "/../etc/lib", expectErr: true},
 	}
 
 	for _, tt := range tests {

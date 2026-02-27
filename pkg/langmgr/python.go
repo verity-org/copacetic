@@ -108,6 +108,11 @@ func validateVenvRoot(venvRoot string) error {
 	if !validVenvRootPattern.MatchString(venvRoot) {
 		return fmt.Errorf("venv root contains unsafe characters (shell metacharacters not allowed): %s", venvRoot)
 	}
+	// Reject path traversal sequences. The regex allows '.' individually, so
+	// ".." would pass the pattern check above without this explicit guard.
+	if strings.Contains(venvRoot, "..") {
+		return fmt.Errorf("venv root must not contain path traversal sequences: %s", venvRoot)
+	}
 	return nil
 }
 
