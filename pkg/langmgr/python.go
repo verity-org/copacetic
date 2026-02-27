@@ -204,10 +204,35 @@ func isNestedSitePackage(pkgPath string) bool {
 	return true
 }
 
+// extractVendorParent returns the name of the package that vendors the package at pkgPath.
+// For example, ".../site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA"
+// yields "setuptools" — the package whose directory tree contains the vendored copy.
+// Returns "" if pkgPath is not a nested (vendored) site-packages path.
+func extractVendorParent(pkgPath string) string {
+	if !isNestedSitePackage(pkgPath) {
+		return ""
+	}
+	p := pkgPath
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	const sitePackagesSuffix = "/site-packages"
+	idx := strings.Index(p, sitePackagesSuffix)
+	if idx == -1 {
+		return ""
+	}
+	rest := strings.TrimPrefix(p[idx+len(sitePackagesSuffix):], "/")
+	if i := strings.Index(rest, "/"); i != -1 {
+		return rest[:i]
+	}
+	return rest
+}
+
 // groupPackagesByEnv separates packages into those belonging to the system Python
 // installation and those residing in virtual environments.
 // Packages whose PkgPath points inside another package's directory (vendored
-// copies) are skipped with a warning — pip cannot patch them independently.
+// copies) are skipped with a warning — pip cannot patch them independently;
+// upgradeVendorParents handles those as a best-effort follow-up step.
 // Returns:
 //   - system: packages with no PkgPath or a system site-packages PkgPath
 //   - venvs: map from venv root (e.g. "/opt/venv") to the packages found there
@@ -218,11 +243,14 @@ func groupPackagesByEnv(updates unversioned.LangUpdatePackages) (
 	venvs = make(map[string]unversioned.LangUpdatePackages)
 	for _, pkg := range updates {
 		if isNestedSitePackage(pkg.PkgPath) {
+			parentMsg := "will attempt to upgrade the parent package"
+			if parent := extractVendorParent(pkg.PkgPath); parent != "" {
+				parentMsg = fmt.Sprintf("will attempt to upgrade parent package %q", parent)
+			}
 			log.Warnf(
-				"Skipping %s@%s: path %q is inside another package's directory — "+
-					"vendored copies cannot be independently patched via pip; "+
-					"update the parent package instead",
-				pkg.Name, pkg.InstalledVersion, pkg.PkgPath,
+				"Skipping direct pip install for %s@%s: path %q is inside another package's directory — "+
+					"vendored copies cannot be independently patched via pip; %s",
+				pkg.Name, pkg.InstalledVersion, pkg.PkgPath, parentMsg,
 			)
 			continue
 		}
@@ -234,6 +262,34 @@ func groupPackagesByEnv(updates unversioned.LangUpdatePackages) (
 		}
 	}
 	return system, venvs
+}
+
+// collectVendorParentNames scans updates for vendored packages and returns the
+// set of parent package names to upgrade, keyed by their environment root.
+// The empty string key ("") represents the system Python installation.
+func collectVendorParentNames(updates unversioned.LangUpdatePackages) map[string][]string {
+	parents := make(map[string][]string)
+	for _, pkg := range updates {
+		if !isNestedSitePackage(pkg.PkgPath) {
+			continue
+		}
+		parent := extractVendorParent(pkg.PkgPath)
+		if parent == "" {
+			continue
+		}
+		root := deriveVenvRoot(pkg.PkgPath)
+		already := false
+		for _, existing := range parents[root] {
+			if existing == parent {
+				already = true
+				break
+			}
+		}
+		if !already {
+			parents[root] = append(parents[root], parent)
+		}
+	}
+	return parents
 }
 
 // filterPythonPackages returns only the packages that are Python packages.
@@ -356,6 +412,33 @@ func (pm *pythonManager) InstallUpdates(
 			log.Warnf("Venv %s package validation issues: %v", venvRoot, validationErr)
 			if !ignoreErrors {
 				return workingState, errPkgsReported, fmt.Errorf("venv %s package validation failed: %w", venvRoot, validationErr)
+			}
+		}
+	}
+
+	// --- Best-effort vendor parent upgrades ---
+	// Packages vendored inside other packages cannot be pip-installed directly.
+	// Upgrading the parent package may include a fixed vendored copy (e.g.
+	// upgrading setuptools can update its bundled wheel in setuptools/_vendor/).
+	vendorParents := collectVendorParentNames(updatesToAttempt)
+	if len(vendorParents) > 0 {
+		var envRoots []string
+		for root := range vendorParents {
+			envRoots = append(envRoots, root)
+		}
+		sort.Strings(envRoots)
+		for _, root := range envRoots {
+			parents := vendorParents[root]
+			envLabel := root
+			if envLabel == "" {
+				envLabel = "system"
+			}
+			log.Infof("Best-effort: upgrading vendor parent(s) %v in %s to patch vendored dependencies", parents, envLabel)
+			upgraded, upgradeErr := pm.upgradeVendorParents(ctx, workingState, root, parents)
+			if upgradeErr != nil {
+				log.Warnf("Vendor parent upgrade failed for %v in %s (best-effort, continuing): %v", parents, envLabel, upgradeErr)
+			} else {
+				workingState = upgraded
 			}
 		}
 	}
@@ -804,6 +887,65 @@ func (pm *pythonManager) upgradeVenvPackagesWithTooling(
 	}
 	resultsBytes := []byte(strings.Join(resultsLines, "\n"))
 	return &merged, resultsBytes, nil
+}
+
+// upgradeVendorParents upgrades the listed parent packages in the given environment.
+// When venvRoot is empty the system pip is used; otherwise the venv's pip binary is located first.
+// This is a best-effort step: if the upgraded parent ships a fixed vendored copy of a vulnerable
+// package (e.g. upgrading setuptools may pull in a patched bundled wheel), the vulnerability is
+// resolved. If not, it remains and was already warned about by groupPackagesByEnv.
+//
+// pip is used for the upgrade because it is universally present wherever Copa runs Python patches.
+// uv (https://github.com/astral-sh/uv) would be faster but is rarely pre-installed in production
+// images. A future enhancement could detect uv and use "uv pip install --upgrade" when available.
+func (pm *pythonManager) upgradeVendorParents(
+	ctx context.Context,
+	currentState *llb.State,
+	venvRoot string,
+	parents []string,
+) (*llb.State, error) {
+	for _, parent := range parents {
+		if err := validatePythonPackageName(parent); err != nil {
+			return nil, fmt.Errorf("invalid vendor parent package name %q: %w", parent, err)
+		}
+	}
+
+	if venvRoot == "" {
+		args := []string{"pip", "install", "--upgrade", fmt.Sprintf("--timeout=%d", defaultPipInstallTimeoutSeconds)}
+		args = append(args, parents...)
+		upgraded := currentState.Run(
+			llb.Args(args),
+			llb.WithProxy(utils.GetProxy()),
+		).Root()
+		return &upgraded, nil
+	}
+
+	if err := validateVenvRoot(venvRoot); err != nil {
+		return nil, fmt.Errorf("invalid venv root for vendor parent upgrade: %w", err)
+	}
+
+	pipPath := ""
+	for _, candidate := range []string{venvRoot + "/bin/pip", venvRoot + "/bin/pip3"} {
+		exists, err := pm.detectPipAt(ctx, currentState, candidate)
+		if err != nil {
+			log.Warnf("Error checking for pip at %s during vendor parent upgrade: %v", candidate, err)
+		}
+		if exists {
+			pipPath = candidate
+			break
+		}
+	}
+	if pipPath == "" {
+		return nil, fmt.Errorf("no pip binary found in venv %s for vendor parent upgrade", venvRoot)
+	}
+
+	args := []string{pipPath, "install", "--upgrade", fmt.Sprintf("--timeout=%d", defaultPipInstallTimeoutSeconds)}
+	args = append(args, parents...)
+	upgraded := currentState.Run(
+		llb.Args(args),
+		llb.WithProxy(utils.GetProxy()),
+	).Root()
+	return &upgraded, nil
 }
 
 // upgradePackagesWithTooling performs Python package upgrades using an external tooling container when pip is absent in target image.
