@@ -896,8 +896,6 @@ func (pm *pythonManager) upgradeVenvPackagesWithTooling(
 // resolved. If not, it remains and was already warned about by groupPackagesByEnv.
 //
 // pip is used for the upgrade because it is universally present wherever Copa runs Python patches.
-// uv (https://github.com/astral-sh/uv) would be faster but is rarely pre-installed in production
-// images. A future enhancement could detect uv and use "uv pip install --upgrade" when available.
 func (pm *pythonManager) upgradeVendorParents(
 	ctx context.Context,
 	currentState *llb.State,
