@@ -866,6 +866,62 @@ func TestDeriveVenvRootEdgeCases(t *testing.T) {
 	}
 }
 
+func TestExtractSitePackagesDir(t *testing.T) {
+	tests := []struct {
+		name     string
+		pkgPath  string
+		expected string
+	}{
+		{
+			name:     "empty path",
+			pkgPath:  "",
+			expected: "",
+		},
+		{
+			name:     "site-packages directory only — no subpath",
+			pkgPath:  "usr/lib/python3.12/site-packages",
+			expected: "",
+		},
+		{
+			name:     "site-packages with trailing slash — no subpath",
+			pkgPath:  "usr/lib/python3.12/site-packages/",
+			expected: "",
+		},
+		{
+			name:     "system dist-info path",
+			pkgPath:  "usr/local/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA",
+			expected: "/usr/local/lib/python3.14/site-packages",
+		},
+		{
+			name:     "venv dist-info path",
+			pkgPath:  "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA",
+			expected: "/app/.venv/lib/python3.14/site-packages",
+		},
+		{
+			name:     "vendored dist-info path — also has site-packages dir",
+			pkgPath:  "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA",
+			expected: "/app/.venv/lib/python3.14/site-packages",
+		},
+		{
+			name:     "path with no site-packages segment",
+			pkgPath:  "usr/lib/python3.11/dist-packages",
+			expected: "",
+		},
+		{
+			name:     "package directory directly under site-packages",
+			pkgPath:  "usr/local/lib/python3.11/site-packages/requests",
+			expected: "/usr/local/lib/python3.11/site-packages",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractSitePackagesDir(tt.pkgPath)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestExtractVendorParent(t *testing.T) {
 	tests := []struct {
 		name     string
