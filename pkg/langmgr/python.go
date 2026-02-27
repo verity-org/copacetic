@@ -204,10 +204,66 @@ func isNestedSitePackage(pkgPath string) bool {
 	return true
 }
 
+// extractVendorParent returns the name of the package that vendors the package at pkgPath.
+// For example, ".../site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA"
+// yields "setuptools" — the package whose directory tree contains the vendored copy.
+// Returns "" if pkgPath is not a nested (vendored) site-packages path.
+func extractVendorParent(pkgPath string) string {
+	if !isNestedSitePackage(pkgPath) {
+		return ""
+	}
+	p := pkgPath
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	const sitePackagesSuffix = "/site-packages"
+	idx := strings.Index(p, sitePackagesSuffix)
+	if idx == -1 {
+		return ""
+	}
+	rest := strings.TrimPrefix(p[idx+len(sitePackagesSuffix):], "/")
+	if i := strings.Index(rest, "/"); i != -1 {
+		return rest[:i]
+	}
+	return rest
+}
+
+// extractSitePackagesDir returns the site-packages directory that contains pkgPath,
+// but only when pkgPath has a component AFTER site-packages/ (i.e. it is a dist-info
+// or package sub-path, not the site-packages directory itself).
+//
+// Examples:
+//
+//	"usr/local/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA" → "/usr/local/lib/python3.14/site-packages"
+//	"app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA" → "/app/.venv/lib/python3.14/site-packages"
+//	"usr/lib/python3.12/site-packages"                                    → "" (IS the dir, no subpath)
+//	""                                                                     → ""
+func extractSitePackagesDir(pkgPath string) string {
+	if pkgPath == "" {
+		return ""
+	}
+	p := pkgPath
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	const suffix = "/site-packages"
+	idx := strings.Index(p, suffix)
+	if idx == -1 {
+		return ""
+	}
+	// Only return a directory when there IS a subpath after site-packages/.
+	rest := strings.TrimPrefix(p[idx+len(suffix):], "/")
+	if rest == "" {
+		return ""
+	}
+	return p[:idx+len(suffix)]
+}
+
 // groupPackagesByEnv separates packages into those belonging to the system Python
 // installation and those residing in virtual environments.
 // Packages whose PkgPath points inside another package's directory (vendored
-// copies) are skipped with a warning — pip cannot patch them independently.
+// copies) are skipped with a warning — pip cannot patch them independently;
+// upgradeVendorParents handles those as a best-effort follow-up step.
 // Returns:
 //   - system: packages with no PkgPath or a system site-packages PkgPath
 //   - venvs: map from venv root (e.g. "/opt/venv") to the packages found there
@@ -218,11 +274,14 @@ func groupPackagesByEnv(updates unversioned.LangUpdatePackages) (
 	venvs = make(map[string]unversioned.LangUpdatePackages)
 	for _, pkg := range updates {
 		if isNestedSitePackage(pkg.PkgPath) {
+			parentMsg := "will attempt to upgrade the parent package"
+			if parent := extractVendorParent(pkg.PkgPath); parent != "" {
+				parentMsg = fmt.Sprintf("will attempt to upgrade parent package %q", parent)
+			}
 			log.Warnf(
-				"Skipping %s@%s: path %q is inside another package's directory — "+
-					"vendored copies cannot be independently patched via pip; "+
-					"update the parent package instead",
-				pkg.Name, pkg.InstalledVersion, pkg.PkgPath,
+				"Skipping direct pip install for %s@%s: path %q is inside another package's directory — "+
+					"vendored copies cannot be independently patched via pip; %s",
+				pkg.Name, pkg.InstalledVersion, pkg.PkgPath, parentMsg,
 			)
 			continue
 		}
@@ -234,6 +293,34 @@ func groupPackagesByEnv(updates unversioned.LangUpdatePackages) (
 		}
 	}
 	return system, venvs
+}
+
+// collectVendorParentNames scans updates for vendored packages and returns the
+// set of parent package names to upgrade, keyed by their environment root.
+// The empty string key ("") represents the system Python installation.
+func collectVendorParentNames(updates unversioned.LangUpdatePackages) map[string][]string {
+	parents := make(map[string][]string)
+	for _, pkg := range updates {
+		if !isNestedSitePackage(pkg.PkgPath) {
+			continue
+		}
+		parent := extractVendorParent(pkg.PkgPath)
+		if parent == "" {
+			continue
+		}
+		root := deriveVenvRoot(pkg.PkgPath)
+		already := false
+		for _, existing := range parents[root] {
+			if existing == parent {
+				already = true
+				break
+			}
+		}
+		if !already {
+			parents[root] = append(parents[root], parent)
+		}
+	}
+	return parents
 }
 
 // filterPythonPackages returns only the packages that are Python packages.
@@ -281,27 +368,104 @@ func (pm *pythonManager) InstallUpdates(
 	// Split packages by environment: system Python vs virtual environments.
 	systemPkgs, venvPkgs := groupPackagesByEnv(updatesToAttempt)
 
+	// Further partition system packages: those whose PkgPath explicitly names a
+	// site-packages directory use the targeted tooling strategy (exact --target path),
+	// because a plain "pip install" may resolve to a different location when sys.path
+	// has been customised by the image (e.g. a venv shadows /usr/local/).
+	// Packages with a bare directory PkgPath or no PkgPath use the generic pip path.
+	explicitSiteMap := make(map[string]unversioned.LangUpdatePackages)
+	var explicitSiteDirs []string // sorted for deterministic ordering
+	var genericSystemPkgs unversioned.LangUpdatePackages
+	for _, pkg := range systemPkgs {
+		if dir := extractSitePackagesDir(pkg.PkgPath); dir != "" {
+			if _, seen := explicitSiteMap[dir]; !seen {
+				explicitSiteDirs = append(explicitSiteDirs, dir)
+			}
+			explicitSiteMap[dir] = append(explicitSiteMap[dir], pkg)
+		} else {
+			genericSystemPkgs = append(genericSystemPkgs, pkg)
+		}
+	}
+	sort.Strings(explicitSiteDirs)
+
 	workingState := currentState
 
-	// --- System Python packages ---
-	if len(systemPkgs) > 0 {
-		log.Debugf("Upgrading %d system Python package(s)", len(systemPkgs))
-		updatedImageState, resultsBytes, upgradeErr := pm.upgradePackages(ctx, workingState, systemPkgs, ignoreErrors)
+	// --- System packages with explicit site-packages path (tooling container) ---
+	for _, sitePkgsDir := range explicitSiteDirs {
+		pkgs := explicitSiteMap[sitePkgsDir]
+		var installSpecs []string
+		for _, u := range pkgs {
+			if err := validatePythonPackageName(u.Name); err != nil {
+				log.Errorf("Invalid package name %s for explicit site target: %v", u.Name, err)
+				if !ignoreErrors {
+					return workingState, errPkgsReported, fmt.Errorf("package name validation failed for %s: %w", u.Name, err)
+				}
+				continue
+			}
+			if u.FixedVersion == "" {
+				continue
+			}
+			if err := validatePythonVersion(u.FixedVersion); err != nil {
+				log.Errorf("Invalid version %s for %s in explicit site target: %v", u.FixedVersion, u.Name, err)
+				if !ignoreErrors {
+					return workingState, errPkgsReported, fmt.Errorf("version validation failed for %s: %w", u.Name, err)
+				}
+				continue
+			}
+			installSpecs = append(installSpecs, u.Name+"=="+u.FixedVersion)
+		}
+		if len(installSpecs) == 0 {
+			continue
+		}
+		log.Infof("Upgrading %d package(s) targeting explicit site-packages path %s", len(installSpecs), sitePkgsDir)
+		updatedState, resultsBytes, upgradeErr := pm.upgradePackagesToSitePackagesDir(ctx, workingState, sitePkgsDir, installSpecs)
+		if upgradeErr != nil {
+			log.Errorf("Failed to upgrade packages at explicit site-packages path %s: %v", sitePkgsDir, upgradeErr)
+			if !ignoreErrors {
+				for _, u := range pkgs {
+					errPkgsReported = append(errPkgsReported, u.Name)
+				}
+				return workingState, errPkgsReported, fmt.Errorf("explicit site-packages upgrade failed for %s: %w", sitePkgsDir, upgradeErr)
+			}
+			for _, u := range pkgs {
+				errPkgsReported = append(errPkgsReported, u.Name)
+			}
+		} else {
+			workingState = updatedState
+			failedValidationPkgs, validationErr := pm.validatePythonPackageVersions(ctx, resultsBytes, pkgs, ignoreErrors)
+			for _, pkgName := range failedValidationPkgs {
+				if !slices.Contains(errPkgsReported, pkgName) {
+					errPkgsReported = append(errPkgsReported, pkgName)
+				}
+			}
+			if validationErr != nil {
+				log.Warnf("Explicit site-packages %s validation issues: %v", sitePkgsDir, validationErr)
+				if !ignoreErrors {
+					return workingState, errPkgsReported, fmt.Errorf("explicit site-packages %s validation failed: %w", sitePkgsDir, validationErr)
+				}
+			}
+		}
+	}
+
+	// --- Generic system Python packages (rely on pip's default install location) ---
+	if len(genericSystemPkgs) > 0 {
+		log.Debugf("Upgrading %d generic system Python package(s)", len(genericSystemPkgs))
+		updatedImageState, resultsBytes, upgradeErr := pm.upgradePackages(ctx, workingState, genericSystemPkgs, ignoreErrors)
 		if upgradeErr != nil {
 			log.Errorf("Failed to upgrade system Python packages: %v.", upgradeErr)
 			if !ignoreErrors {
-				for _, u := range systemPkgs {
+				for _, u := range genericSystemPkgs {
 					errPkgsReported = append(errPkgsReported, u.Name)
 				}
 				return currentState, errPkgsReported, fmt.Errorf("python package upgrade operation failed: %w", upgradeErr)
 			}
 			log.Warnf("System Python package upgrade failed but errors are ignored.")
-			for _, u := range systemPkgs {
+			for _, u := range genericSystemPkgs {
 				errPkgsReported = append(errPkgsReported, u.Name)
 			}
 		} else {
 			workingState = updatedImageState
-			failedValidationPkgs, validationErr := pm.validatePythonPackageVersions(ctx, resultsBytes, systemPkgs, ignoreErrors)
+			failedValidationPkgs, validationErr := pm.validatePythonPackageVersions(ctx, resultsBytes, genericSystemPkgs, ignoreErrors)
 			for _, pkgName := range failedValidationPkgs {
 				if !slices.Contains(errPkgsReported, pkgName) {
 					errPkgsReported = append(errPkgsReported, pkgName)
@@ -356,6 +520,33 @@ func (pm *pythonManager) InstallUpdates(
 			log.Warnf("Venv %s package validation issues: %v", venvRoot, validationErr)
 			if !ignoreErrors {
 				return workingState, errPkgsReported, fmt.Errorf("venv %s package validation failed: %w", venvRoot, validationErr)
+			}
+		}
+	}
+
+	// --- Best-effort vendor parent upgrades ---
+	// Packages vendored inside other packages cannot be pip-installed directly.
+	// Upgrading the parent package may include a fixed vendored copy (e.g.
+	// upgrading setuptools can update its bundled wheel in setuptools/_vendor/).
+	vendorParents := collectVendorParentNames(updatesToAttempt)
+	if len(vendorParents) > 0 {
+		var envRoots []string
+		for root := range vendorParents {
+			envRoots = append(envRoots, root)
+		}
+		sort.Strings(envRoots)
+		for _, root := range envRoots {
+			parents := vendorParents[root]
+			envLabel := root
+			if envLabel == "" {
+				envLabel = "system"
+			}
+			log.Infof("Best-effort: upgrading vendor parent(s) %v in %s to patch vendored dependencies", parents, envLabel)
+			upgraded, upgradeErr := pm.upgradeVendorParents(ctx, workingState, root, parents)
+			if upgradeErr != nil {
+				log.Warnf("Vendor parent upgrade failed for %v in %s (best-effort, continuing): %v", parents, envLabel, upgradeErr)
+			} else {
+				workingState = upgraded
 			}
 		}
 	}
@@ -657,6 +848,85 @@ func (pm *pythonManager) installPythonPackagesWithPip(currentState *llb.State, p
 	).Root()
 }
 
+// upgradePackagesToSitePackagesDir installs packages into a specific site-packages
+// directory using the tooling container strategy, targeting that exact path.
+//
+// This is needed when Trivy reports a package at a specific dist-info path inside a
+// site-packages directory that is NOT on the running Python's sys.path (e.g. a system
+// install shadowed by a venv). A plain "pip install" would target the wrong location
+// in that case; this method bypasses pip's default install resolution entirely.
+//
+// The strategy mirrors upgradeVenvPackagesWithTooling:
+//  1. A Python tooling container installs the packages into /copa-pkgs with --target.
+//  2. The old package directory and dist-info are removed from sitePkgsDir.
+//  3. The new files are copied into sitePkgsDir.
+func (pm *pythonManager) upgradePackagesToSitePackagesDir(
+	ctx context.Context,
+	currentState *llb.State,
+	sitePkgsDir string,
+	installPkgSpecs []string,
+) (*llb.State, []byte, error) {
+	if len(installPkgSpecs) == 0 {
+		return currentState, []byte{}, nil
+	}
+	if !strings.HasPrefix(sitePkgsDir, "/") {
+		return nil, nil, fmt.Errorf("site-packages dir must be an absolute path: %s", sitePkgsDir)
+	}
+	if !validVenvRootPattern.MatchString(sitePkgsDir) {
+		return nil, nil, fmt.Errorf("site-packages dir contains unsafe characters: %s", sitePkgsDir)
+	}
+
+	log.Infof("Using tooling container to target explicit site-packages path %s: %v", sitePkgsDir, installPkgSpecs)
+
+	// Infer Python version from path to select a matching tooling image.
+	versionRegex := regexp.MustCompile(`python(\d+\.\d+)`)
+	toolingTag := defaultToolingPythonTag
+	if m := versionRegex.FindStringSubmatch(sitePkgsDir); len(m) == 2 {
+		toolingTag = fmt.Sprintf("%s-slim", m[1])
+	}
+	toolingImage := fmt.Sprintf(toolingImageTemplate, toolingTag)
+	log.Infof("Using tooling image %s for explicit site-packages path %s", toolingImage, sitePkgsDir)
+
+	// Install into /copa-pkgs in the tooling container.
+	pipInstallArgs := []string{
+		"pip", "install",
+		"--no-cache-dir", "--disable-pip-version-check", "--no-deps",
+		"--target", "/copa-pkgs",
+	}
+	pipInstallArgs = append(pipInstallArgs, installPkgSpecs...)
+	toolingState := llb.Image(toolingImage).Run(
+		llb.Args(pipInstallArgs),
+		llb.WithProxy(buildkit.GetProxy()),
+	).Root()
+
+	// Build package base names (lowercase, hyphens) for cleanup.
+	var pkgBaseNames []string
+	for _, spec := range installPkgSpecs {
+		parts := strings.SplitN(spec, "==", 2)
+		name := strings.ToLower(strings.ReplaceAll(parts[0], "_", "-"))
+		pkgBaseNames = append(pkgBaseNames, name)
+	}
+	// Remove old package dir and dist-info, then copy in the new files.
+	// sitePkgsDir is passed as $1; package names as subsequent args — no shell interpolation.
+	cleanScript := `sp="$1"; shift; for p in "$@"; do rm -rf "$sp/$p" 2>/dev/null || true; for d in "$sp/$p"-*.dist-info; do [ -d "$d" ] && rm -rf "$d" || true; done; done`
+	cleanArgs := []string{"sh", "-c", cleanScript, "clean-script", sitePkgsDir}
+	cleanArgs = append(cleanArgs, pkgBaseNames...)
+	cleaned := currentState.Run(llb.Args(cleanArgs)).Root()
+
+	merged := cleaned.File(
+		llb.Copy(toolingState, "/copa-pkgs/", sitePkgsDir+"/", &llb.CopyInfo{CopyDirContentsOnly: true, CreateDestPath: true}),
+	)
+
+	// Synthesize pip-freeze-style results for validation.
+	var resultsLines []string
+	for _, spec := range installPkgSpecs {
+		if strings.Contains(spec, "==") {
+			resultsLines = append(resultsLines, spec)
+		}
+	}
+	return &merged, []byte(strings.Join(resultsLines, "\n")), nil
+}
+
 // upgradeVenvPackages installs package upgrades in a specific virtual environment.
 // It tries <venvRoot>/bin/pip first, then <venvRoot>/bin/pip3.
 // If neither pip binary is found in the venv, it falls back to the tooling container
@@ -804,6 +1074,63 @@ func (pm *pythonManager) upgradeVenvPackagesWithTooling(
 	}
 	resultsBytes := []byte(strings.Join(resultsLines, "\n"))
 	return &merged, resultsBytes, nil
+}
+
+// upgradeVendorParents upgrades the listed parent packages in the given environment.
+// When venvRoot is empty the system pip is used; otherwise the venv's pip binary is located first.
+// This is a best-effort step: if the upgraded parent ships a fixed vendored copy of a vulnerable
+// package (e.g. upgrading setuptools may pull in a patched bundled wheel), the vulnerability is
+// resolved. If not, it remains and was already warned about by groupPackagesByEnv.
+//
+// pip is used for the upgrade because it is universally present wherever Copa runs Python patches.
+func (pm *pythonManager) upgradeVendorParents(
+	ctx context.Context,
+	currentState *llb.State,
+	venvRoot string,
+	parents []string,
+) (*llb.State, error) {
+	for _, parent := range parents {
+		if err := validatePythonPackageName(parent); err != nil {
+			return nil, fmt.Errorf("invalid vendor parent package name %q: %w", parent, err)
+		}
+	}
+
+	if venvRoot == "" {
+		args := []string{"pip", "install", "--upgrade", fmt.Sprintf("--timeout=%d", defaultPipInstallTimeoutSeconds)}
+		args = append(args, parents...)
+		upgraded := currentState.Run(
+			llb.Args(args),
+			llb.WithProxy(buildkit.GetProxy()),
+		).Root()
+		return &upgraded, nil
+	}
+
+	if err := validateVenvRoot(venvRoot); err != nil {
+		return nil, fmt.Errorf("invalid venv root for vendor parent upgrade: %w", err)
+	}
+
+	pipPath := ""
+	for _, candidate := range []string{venvRoot + "/bin/pip", venvRoot + "/bin/pip3"} {
+		exists, err := pm.detectPipAt(ctx, currentState, candidate)
+		if err != nil {
+			log.Warnf("Error checking for pip at %s during vendor parent upgrade: %v", candidate, err)
+		}
+		if exists {
+			pipPath = candidate
+			break
+		}
+	}
+	if pipPath == "" {
+		return nil, fmt.Errorf("no pip binary found in venv %s for vendor parent upgrade", venvRoot)
+	}
+
+	args := []string{pipPath, "install", "--upgrade", fmt.Sprintf("--timeout=%d", defaultPipInstallTimeoutSeconds)}
+	args = append(args, parents...)
+	upgraded := currentState.Run(
+		llb.Args(args),
+		llb.WithProxy(buildkit.GetProxy()),
+	).Root()
+	return &upgraded, nil
 }
 
 // upgradePackagesWithTooling performs Python package upgrades using an external tooling container when pip is absent in target image.

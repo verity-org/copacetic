@@ -528,17 +528,23 @@ func TestGroupPackagesByEnv(t *testing.T) {
 			name: "vendored package is skipped, top-level dist-info path is kept",
 			updates: unversioned.LangUpdatePackages{
 				// Top-level package reported via dist-info METADATA path — patchable, keep it.
-				{Name: "pip", InstalledVersion: "25.3", FixedVersion: "26.0",
-					PkgPath: "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA"},
+				{
+					Name: "pip", InstalledVersion: "25.3", FixedVersion: "26.0",
+					PkgPath: "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA",
+				},
 				// Vendored copy inside setuptools — skip it.
-				{Name: "wheel", InstalledVersion: "0.45.1", FixedVersion: "0.46.2",
-					PkgPath: "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA"},
+				{
+					Name: "wheel", InstalledVersion: "0.45.1", FixedVersion: "0.46.2",
+					PkgPath: "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA",
+				},
 			},
 			expectedSystem: unversioned.LangUpdatePackages{},
 			expectedVenvs: map[string]unversioned.LangUpdatePackages{
 				"/app/.venv": {
-					{Name: "pip", InstalledVersion: "25.3", FixedVersion: "26.0",
-						PkgPath: "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA"},
+					{
+						Name: "pip", InstalledVersion: "25.3", FixedVersion: "26.0",
+						PkgPath: "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA",
+					},
 				},
 			},
 		},
@@ -856,6 +862,195 @@ func TestDeriveVenvRootEdgeCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := deriveVenvRoot(tt.pkgPath)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestExtractSitePackagesDir(t *testing.T) {
+	tests := []struct {
+		name     string
+		pkgPath  string
+		expected string
+	}{
+		{
+			name:     "empty path",
+			pkgPath:  "",
+			expected: "",
+		},
+		{
+			name:     "site-packages directory only — no subpath",
+			pkgPath:  "usr/lib/python3.12/site-packages",
+			expected: "",
+		},
+		{
+			name:     "site-packages with trailing slash — no subpath",
+			pkgPath:  "usr/lib/python3.12/site-packages/",
+			expected: "",
+		},
+		{
+			name:     "system dist-info path",
+			pkgPath:  "usr/local/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA",
+			expected: "/usr/local/lib/python3.14/site-packages",
+		},
+		{
+			name:     "venv dist-info path",
+			pkgPath:  "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA",
+			expected: "/app/.venv/lib/python3.14/site-packages",
+		},
+		{
+			name:     "vendored dist-info path — also has site-packages dir",
+			pkgPath:  "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA",
+			expected: "/app/.venv/lib/python3.14/site-packages",
+		},
+		{
+			name:     "path with no site-packages segment",
+			pkgPath:  "usr/lib/python3.11/dist-packages",
+			expected: "",
+		},
+		{
+			name:     "package directory directly under site-packages",
+			pkgPath:  "usr/local/lib/python3.11/site-packages/requests",
+			expected: "/usr/local/lib/python3.11/site-packages",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractSitePackagesDir(tt.pkgPath)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestExtractVendorParent(t *testing.T) {
+	tests := []struct {
+		name     string
+		pkgPath  string
+		expected string
+	}{
+		{
+			name:     "empty path",
+			pkgPath:  "",
+			expected: "",
+		},
+		{
+			name:     "top-level dist-info path — not vendored",
+			pkgPath:  "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA",
+			expected: "",
+		},
+		{
+			name:     "site-packages directory only — not vendored",
+			pkgPath:  "app/.venv/lib/python3.14/site-packages",
+			expected: "",
+		},
+		{
+			name:     "setuptools vendors wheel",
+			pkgPath:  "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA",
+			expected: "setuptools",
+		},
+		{
+			name:     "pip vendors requests",
+			pkgPath:  "app/.venv/lib/python3.12/site-packages/pip/_vendor/requests-2.28.0.dist-info/METADATA",
+			expected: "pip",
+		},
+		{
+			name:     "some_pkg bundles certifi — system site-packages",
+			pkgPath:  "usr/local/lib/python3.11/site-packages/some_pkg/bundled/certifi-2021.10.8.dist-info",
+			expected: "some_pkg",
+		},
+		{
+			name:     "no site-packages segment",
+			pkgPath:  "usr/lib/python3.11/dist-packages",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractVendorParent(tt.pkgPath)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestCollectVendorParentNames(t *testing.T) {
+	tests := []struct {
+		name     string
+		updates  unversioned.LangUpdatePackages
+		expected map[string][]string
+	}{
+		{
+			name:     "no vendored packages",
+			updates:  unversioned.LangUpdatePackages{},
+			expected: map[string][]string{},
+		},
+		{
+			name: "top-level packages only — no parents collected",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "requests", PkgPath: "opt/venv/lib/python3.12/site-packages"},
+				{Name: "pip", PkgPath: "opt/venv/lib/python3.12/site-packages/pip-25.3.dist-info/METADATA"},
+			},
+			expected: map[string][]string{},
+		},
+		{
+			name: "vendored package in venv — parent collected under venv root",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "wheel", PkgPath: "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA"},
+			},
+			expected: map[string][]string{
+				"/app/.venv": {"setuptools"},
+			},
+		},
+		{
+			name: "two vendored packages with same parent — parent deduplicated",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "wheel", PkgPath: "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA"},
+				{Name: "jaraco.context", PkgPath: "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/jaraco.context-5.3.0.dist-info/METADATA"},
+			},
+			expected: map[string][]string{
+				"/app/.venv": {"setuptools"},
+			},
+		},
+		{
+			name: "vendored packages from two different parents in the same venv",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "wheel", PkgPath: "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA"},
+				{Name: "requests", PkgPath: "app/.venv/lib/python3.14/site-packages/pip/_vendor/requests-2.28.0.dist-info/METADATA"},
+			},
+			expected: map[string][]string{
+				// Parent packages are "setuptools" and "pip" (the vendoring packages, not the vendored ones).
+				"/app/.venv": {"setuptools", "pip"},
+			},
+		},
+		{
+			name: "vendored package in system site-packages — empty string key",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "certifi", PkgPath: "usr/local/lib/python3.11/site-packages/some_pkg/bundled/certifi-2021.10.8.dist-info"},
+			},
+			expected: map[string][]string{
+				"": {"some_pkg"},
+			},
+		},
+		{
+			name: "mix of top-level and vendored packages",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "pip", PkgPath: "app/.venv/lib/python3.14/site-packages/pip-25.3.dist-info/METADATA"},
+				{Name: "wheel", PkgPath: "app/.venv/lib/python3.14/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA"},
+			},
+			expected: map[string][]string{
+				"/app/.venv": {"setuptools"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := collectVendorParentNames(tt.updates)
+			assert.Equal(t, len(tt.expected), len(result), "number of env roots mismatch")
+			for root, expectedParents := range tt.expected {
+				assert.ElementsMatch(t, expectedParents, result[root],
+					"parents for root %q mismatch", root)
+			}
 		})
 	}
 }
