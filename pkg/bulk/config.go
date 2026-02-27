@@ -3,6 +3,7 @@ package bulk
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 const (
@@ -10,11 +11,28 @@ const (
 	ExpectedKind       = "PatchConfig"
 )
 
+// ChartSpec defines a Helm chart from which images should be discovered.
+type ChartSpec struct {
+	Name       string `yaml:"name"`
+	Version    string `yaml:"version"`
+	Repository string `yaml:"repository"` // "oci://..." or "https://..."
+}
+
+// OverrideSpec defines a tag variant substitution for chart-discovered images.
+// From and To are substrings of the image tag (e.g., From: "distroless-libc", To: "debian").
+type OverrideSpec struct {
+	From string `yaml:"from"`
+	To   string `yaml:"to"`
+}
+
 // PatchConfig represents the top-level structure for the bulk patching configuration.
 type PatchConfig struct {
-	APIVersion string      `yaml:"apiVersion"`
-	Kind       string      `yaml:"kind"`
-	Images     []ImageSpec `yaml:"images"`
+	APIVersion string                  `yaml:"apiVersion"`
+	Kind       string                  `yaml:"kind"`
+	Target     TargetSpec              `yaml:"target,omitempty"`   // Default target for all images
+	Charts     []ChartSpec             `yaml:"charts,omitempty"`   // Helm charts to discover images from
+	Overrides  map[string]OverrideSpec `yaml:"overrides,omitempty"` // Tag variant overrides for chart images
+	Images     []ImageSpec             `yaml:"images,omitempty"`   // Explicitly listed images
 }
 
 // ImageSpec defines the configuration for patching a single image.
@@ -26,9 +44,10 @@ type ImageSpec struct {
 	Platforms []string    `yaml:"platforms,omitempty"`
 }
 
-// TargetSpec defines how the patched image's tag should be named.
+// TargetSpec defines how the patched image should be tagged and where it should be pushed.
 type TargetSpec struct {
-	Tag string `yaml:"tag,omitempty"`
+	Registry string `yaml:"registry,omitempty"` // Target registry/namespace prefix (e.g., "ghcr.io/myorg")
+	Tag      string `yaml:"tag,omitempty"`      // Tag template (defaults to "{{ .SourceTag }}-patched")
 }
 
 // TagStrategy defines the method for discovering image tags to be patched.
@@ -40,6 +59,43 @@ type TagStrategy struct {
 	Exclude  []string `yaml:"exclude,omitempty"`
 
 	compiledPattern *regexp.Regexp
+}
+
+// validateCharts validates all ChartSpec entries in the config.
+func validateCharts(charts []ChartSpec) error {
+	for i, c := range charts {
+		if c.Name == "" {
+			return fmt.Errorf("charts[%d]: name is required", i)
+		}
+		if c.Version == "" {
+			return fmt.Errorf("charts[%d] (%s): version is required", i, c.Name)
+		}
+		if c.Repository == "" {
+			return fmt.Errorf("charts[%d] (%s): repository is required", i, c.Name)
+		}
+		if !isValidChartRepository(c.Repository) {
+			return fmt.Errorf("charts[%d] (%s): repository must start with 'oci://' or 'https://'", i, c.Name)
+		}
+	}
+	return nil
+}
+
+// isValidChartRepository checks whether a repository URL has a supported scheme.
+func isValidChartRepository(repo string) bool {
+	return strings.HasPrefix(repo, "oci://") || strings.HasPrefix(repo, "https://")
+}
+
+// validateOverrides validates all OverrideSpec entries in the config.
+func validateOverrides(overrides map[string]OverrideSpec) error {
+	for key, o := range overrides {
+		if o.From == "" {
+			return fmt.Errorf("overrides[%q]: from is required", key)
+		}
+		if o.To == "" {
+			return fmt.Errorf("overrides[%q]: to is required", key)
+		}
+	}
+	return nil
 }
 
 func (t *TagStrategy) UnmarshalYAML(unmarshal func(interface{}) error) error {

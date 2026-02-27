@@ -1,9 +1,18 @@
 package types
 
-import (
-	"time"
+import "time"
 
-	"github.com/moby/buildkit/util/progress/progressui"
+// DisplayMode controls how BuildKit progress is rendered.
+// Mirrors progressui.DisplayMode but defined here so consumers of pkg/types
+// don't need to import moby/buildkit.
+type DisplayMode string
+
+const (
+	AutoMode    DisplayMode = "auto"
+	PlainMode   DisplayMode = "plain"
+	TtyMode     DisplayMode = "tty"
+	QuietMode   DisplayMode = "quiet"
+	RawJSONMode DisplayMode = "rawjson"
 )
 
 // Options contains common copacetic options.
@@ -16,6 +25,7 @@ type Options struct {
 
 	// Bulk image patch configuration
 	ConfigFile string
+	DryRun     bool // Skip actual patching; run discovery and skip detection only
 
 	// Working environment
 	WorkingFolder string
@@ -26,9 +36,10 @@ type Options struct {
 	IgnoreError bool
 
 	// Output configuration
-	Format   string
-	Output   string
-	Progress progressui.DisplayMode
+	Format     string
+	Output     string
+	OutputJSON string
+	Progress   DisplayMode
 
 	// Buildkit connection options
 	BkAddr       string
