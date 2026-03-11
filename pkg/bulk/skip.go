@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/project-copacetic/copacetic/pkg/patch"
 	"github.com/project-copacetic/copacetic/pkg/report"
 	log "github.com/sirupsen/logrus"
 )
@@ -17,53 +16,29 @@ import (
 type skipCheckResult struct {
 	ShouldSkip  bool
 	Reason      string
-	ResolvedTag string // The tag to use if NOT skipping (versioned)
+	ResolvedTag string // The tag to use if NOT skipping
 }
 
-// isArchSpecificTag reports whether tag is an architecture-specific variant of baseTag
-// (e.g. "3.18.0-patched-386" for baseTag "3.18.0-patched").
-// It checks against the suffixes derived from Copa's validPlatforms list.
-func isArchSpecificTag(tag, baseTag string) bool {
-	for _, suffix := range patch.ArchTagSuffixes() {
-		if tag == baseTag+"-"+suffix {
-			return true
-		}
-	}
-	return false
-}
-
-// discoverExistingPatchTags lists all tags in the repository that match the base tag pattern.
-// It returns tags matching either "<baseTag>" or "<baseTag>-N" where N is a number.
-// Architecture-specific tags (e.g. "<baseTag>-386") are excluded.
-func discoverExistingPatchTags(repo, baseTag string) ([]string, error) {
+// tagExistsInRepo checks whether the given tag exists in the remote repository.
+func tagExistsInRepo(repo, tag string) (bool, error) {
 	repository, err := name.NewRepository(repo)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse repository name '%s': %w", repo, err)
+		return false, fmt.Errorf("failed to parse repository name '%s': %w", repo, err)
 	}
 
 	allTags, err := listAllTags(repository)
 	if err != nil {
-		// Fail-open: if we can't list tags, proceed with base tag
+		// Fail-open: if we can't list tags, assume tag doesn't exist
 		log.Warnf("Failed to list tags for repository '%s': %v", repo, err)
-		return []string{}, nil
+		return false, nil
 	}
 
-	var matching []string
-	for _, tag := range allTags {
-		if tag == baseTag && !isArchSpecificTag(tag, baseTag) {
-			matching = append(matching, tag)
+	for _, t := range allTags {
+		if t == tag {
+			return true, nil
 		}
 	}
-
-	return matching, nil
-}
-
-// latestPatchTag returns the tag with the highest version number from the list.
-func latestPatchTag(tags []string) string {
-	if len(tags) == 0 {
-		return ""
-	}
-	return tags[len(tags)-1]
+	return false, nil
 }
 
 // reportIndex maps normalized image references to report file paths.
@@ -172,22 +147,22 @@ var checkReportForVulnerabilities = func(reportPath, scanner, pkgTypes, libraryP
 	return hasUpdates, nil
 }
 
-// evaluatePatchAction orchestrates the full workflow: discover existing tags, check report if needed, and decide whether to patch.
+// evaluatePatchAction orchestrates the full workflow: check if patched tag exists, check report if needed, and decide whether to patch.
 func evaluatePatchAction(repo, baseTag, scanner string, reports *reportIndex, pkgTypes, libraryPatchLevel string) skipCheckResult {
-	// Discover existing patched tags
-	existingTags, err := discoverExistingPatchTags(repo, baseTag)
+	// Check if the patched tag already exists in the registry
+	exists, err := tagExistsInRepo(repo, baseTag)
 	if err != nil {
-		// Fail-open: if we can't discover tags, proceed with patching
-		log.Warnf("Failed to discover existing tags for '%s': %v. Proceeding with patch.", repo, err)
+		// Fail-open: if we can't check, proceed with patching
+		log.Warnf("Failed to check existing tags for '%s': %v. Proceeding with patch.", repo, err)
 		return skipCheckResult{
 			ShouldSkip:  false,
 			ResolvedTag: baseTag,
 		}
 	}
 
-	// If no existing patched tags, proceed with base tag
-	if len(existingTags) == 0 {
-		log.Debugf("No existing patched tags found for '%s', proceeding with base tag '%s'", repo, baseTag)
+	// If no existing patched tag, proceed with patching
+	if !exists {
+		log.Debugf("No existing patched tag found for '%s', proceeding with base tag '%s'", repo, baseTag)
 		return skipCheckResult{
 			ShouldSkip:  false,
 			Reason:      "not_patched",
@@ -204,11 +179,8 @@ func evaluatePatchAction(repo, baseTag, scanner string, reports *reportIndex, pk
 		}
 	}
 
-	// Get the latest existing tag to check
-	latestTag := latestPatchTag(existingTags)
-	imageRef := fmt.Sprintf("%s:%s", repo, latestTag)
-
-	// Look up the report using the index
+	// Look up the report for the existing patched image
+	imageRef := fmt.Sprintf("%s:%s", repo, baseTag)
 	reportPath, found := reports.lookup(imageRef)
 	if !found {
 		// Report not found, fail-open and proceed to patch
@@ -236,11 +208,11 @@ func evaluatePatchAction(repo, baseTag, scanner string, reports *reportIndex, pk
 		return skipCheckResult{
 			ShouldSkip:  true,
 			Reason:      "no fixable vulnerabilities",
-			ResolvedTag: latestTag,
+			ResolvedTag: baseTag,
 		}
 	}
 
-	// Vulnerabilities found, proceed with patching using base tag (overwrite)
+	// Vulnerabilities found, proceed with patching (overwrite existing tag)
 	log.Debugf("Fixable vulnerabilities found in report for '%s', re-patching with tag '%s'", imageRef, baseTag)
 	return skipCheckResult{
 		ShouldSkip:  false,

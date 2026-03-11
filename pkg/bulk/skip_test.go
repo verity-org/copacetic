@@ -11,114 +11,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDiscoverExistingPatchTags(t *testing.T) {
-	tests := []struct {
-		name        string
-		repo        string
-		baseTag     string
-		allTags     []string
-		expected    []string
-		expectError bool
-	}{
-		{
-			name:     "no matching tags",
-			repo:     "registry.io/nginx",
-			baseTag:  "1.25.3-patched",
-			allTags:  []string{"1.25.3", "1.25.2-patched", "latest"},
-			expected: []string{},
-		},
-		{
-			name:     "only base tag exists",
-			repo:     "registry.io/nginx",
-			baseTag:  "1.25.3-patched",
-			allTags:  []string{"1.25.3", "1.25.3-patched", "latest"},
-			expected: []string{"1.25.3-patched"},
-		},
-		{
-			name:     "base tag found, numbered variants ignored",
-			repo:     "registry.io/nginx",
-			baseTag:  "1.25.3-patched",
-			allTags:  []string{"1.25.3", "1.25.3-patched", "1.25.3-patched-1", "1.25.3-patched-2", "latest"},
-			expected: []string{"1.25.3-patched"},
-		},
-		{
-			name:     "only numbered variants, no exact base tag",
-			repo:     "registry.io/nginx",
-			baseTag:  "1.25.3-patched",
-			allTags:  []string{"1.25.3", "1.25.3-patched-1", "1.25.3-patched-3", "latest"},
-			expected: []string{},
-		},
-		{
-			name:     "custom template exact match",
-			repo:     "registry.io/nginx",
-			baseTag:  "1.25.3-fixed",
-			allTags:  []string{"1.25.3-fixed", "1.25.3-fixed-1", "1.25.3-patched"},
-			expected: []string{"1.25.3-fixed"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Mock listAllTags
-			oldListAllTags := listAllTags
-			defer func() { listAllTags = oldListAllTags }()
-			listAllTags = func(repo name.Repository) ([]string, error) {
-				return tt.allTags, nil
-			}
-
-			result, err := discoverExistingPatchTags(tt.repo, tt.baseTag)
-
-			if tt.expectError {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				if len(tt.expected) == 0 {
-					assert.Empty(t, result)
-				} else {
-					assert.Equal(t, tt.expected, result)
-				}
-			}
-		})
-	}
-}
-
-func TestDiscoverExistingPatchTags_ArchSuffixesExcluded(t *testing.T) {
+func TestTagExistsInRepo(t *testing.T) {
 	tests := []struct {
 		name     string
-		baseTag  string
+		repo     string
+		tag      string
 		allTags  []string
-		expected []string
+		expected bool
 	}{
 		{
-			name:     "386 arch tag excluded (numeric arch collision)",
-			baseTag:  "3.18.0-patched",
-			allTags:  []string{"3.18.0-patched", "3.18.0-patched-386", "3.18.0-patched-amd64", "3.18.0-patched-arm64"},
-			expected: []string{"3.18.0-patched"},
+			name:     "tag exists",
+			repo:     "registry.io/nginx",
+			tag:      "1.25.3-patched",
+			allTags:  []string{"1.25.3", "1.25.3-patched", "latest"},
+			expected: true,
 		},
 		{
-			name:     "base tag only, arch and numbered tags excluded",
-			baseTag:  "3.18.0-patched",
-			allTags:  []string{"3.18.0-patched", "3.18.0-patched-1", "3.18.0-patched-386", "3.18.0-patched-arm64"},
-			expected: []string{"3.18.0-patched"},
+			name:     "tag does not exist",
+			repo:     "registry.io/nginx",
+			tag:      "1.25.3-patched",
+			allTags:  []string{"1.25.3", "1.25.2-patched", "latest"},
+			expected: false,
 		},
 		{
-			name:    "all known arch suffixes excluded",
-			baseTag: "1.0.0-patched",
-			allTags: []string{
-				"1.0.0-patched",
-				"1.0.0-patched-386",
-				"1.0.0-patched-amd64",
-				"1.0.0-patched-arm",
-				"1.0.0-patched-arm-v5",
-				"1.0.0-patched-arm-v6",
-				"1.0.0-patched-arm-v7",
-				"1.0.0-patched-arm64",
-				"1.0.0-patched-arm64-v8",
-				"1.0.0-patched-ppc64le",
-				"1.0.0-patched-s390x",
-				"1.0.0-patched-riscv64",
-			},
-			expected: []string{"1.0.0-patched"},
+			name:     "empty tag list",
+			repo:     "registry.io/nginx",
+			tag:      "1.25.3-patched",
+			allTags:  []string{},
+			expected: false,
 		},
 	}
 
@@ -130,85 +50,24 @@ func TestDiscoverExistingPatchTags_ArchSuffixesExcluded(t *testing.T) {
 				return tt.allTags, nil
 			}
 
-			result, err := discoverExistingPatchTags("registry.io/alpine", tt.baseTag)
+			exists, err := tagExistsInRepo(tt.repo, tt.tag)
 			require.NoError(t, err)
-			if len(tt.expected) == 0 {
-				assert.Empty(t, result)
-			} else {
-				assert.Equal(t, tt.expected, result)
-			}
+			assert.Equal(t, tt.expected, exists)
 		})
 	}
 }
 
-func TestIsArchSpecificTag(t *testing.T) {
-	tests := []struct {
-		tag      string
-		baseTag  string
-		expected bool
-	}{
-		{"3.18.0-patched-386", "3.18.0-patched", true},
-		{"3.18.0-patched-amd64", "3.18.0-patched", true},
-		{"3.18.0-patched-arm64", "3.18.0-patched", true},
-		{"3.18.0-patched-arm", "3.18.0-patched", true},
-		{"3.18.0-patched-arm-v7", "3.18.0-patched", true},
-		{"3.18.0-patched-ppc64le", "3.18.0-patched", true},
-		{"3.18.0-patched-s390x", "3.18.0-patched", true},
-		{"3.18.0-patched-riscv64", "3.18.0-patched", true},
-		// These are NOT arch tags — they should be treated as version tags
-		{"3.18.0-patched-1", "3.18.0-patched", false},
-		{"3.18.0-patched-10", "3.18.0-patched", false},
-		{"3.18.0-patched", "3.18.0-patched", false},
-		// Wrong base tag
-		{"3.18.0-patched-386", "3.18.0-fixed", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.tag+"_base_"+tt.baseTag, func(t *testing.T) {
-			result := isArchSpecificTag(tt.tag, tt.baseTag)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestDiscoverExistingPatchTags_RegistryError(t *testing.T) {
-	// Mock listAllTags to return an error
+func TestTagExistsInRepo_RegistryError(t *testing.T) {
 	oldListAllTags := listAllTags
 	defer func() { listAllTags = oldListAllTags }()
 	listAllTags = func(repo name.Repository) ([]string, error) {
 		return nil, fmt.Errorf("registry auth failed")
 	}
 
-	result, err := discoverExistingPatchTags("registry.io/nginx", "1.25.3-patched")
-	// Should fail-open and return empty list with no error
+	exists, err := tagExistsInRepo("registry.io/nginx", "1.25.3-patched")
+	// Should fail-open: no error, tag treated as not existing
 	assert.NoError(t, err)
-	assert.Empty(t, result)
-}
-
-func TestLatestPatchTag(t *testing.T) {
-	tests := []struct {
-		name     string
-		tags     []string
-		expected string
-	}{
-		{
-			name:     "empty list",
-			tags:     []string{},
-			expected: "",
-		},
-		{
-			name:     "single base tag",
-			tags:     []string{"1.25.3-patched"},
-			expected: "1.25.3-patched",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := latestPatchTag(tt.tags)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
+	assert.False(t, exists)
 }
 
 func TestCheckReportForVulnerabilities(t *testing.T) {
@@ -428,7 +287,7 @@ func TestEvaluatePatchAction(t *testing.T) {
 			reports:          &reportIndex{refs: map[string]string{}},
 			listTagsError:    fmt.Errorf("auth error"),
 			expectedSkip:     false,
-			expectedReason:   "not_patched", // discoverExistingPatchTags returns [] on error (fail-open)
+			expectedReason:   "not_patched",
 			expectedResolved: "1.25.3-patched",
 		},
 		{
@@ -493,9 +352,8 @@ func TestEvaluatePatchAction(t *testing.T) {
 			if len(tt.existingTags) == 0 || tt.reports == nil || tt.listTagsError != nil {
 				assert.False(t, checkCalled, "Report check should not have been called")
 			} else {
-				// Check was called only if report was found
-				latestTag := latestPatchTag(tt.existingTags)
-				imageRef := fmt.Sprintf("%s:%s", tt.repo, latestTag)
+				// Check was called only if report was found in the index
+				imageRef := fmt.Sprintf("%s:%s", tt.repo, tt.baseTag)
 				_, found := tt.reports.lookup(imageRef)
 				assert.Equal(t, found, checkCalled, "Report check call mismatch")
 			}
