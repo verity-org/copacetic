@@ -35,32 +35,25 @@ func TestDiscoverExistingPatchTags(t *testing.T) {
 			expected: []string{"1.25.3-patched"},
 		},
 		{
-			name:     "base tag and versioned tags",
+			name:     "base tag found, numbered variants ignored",
 			repo:     "registry.io/nginx",
 			baseTag:  "1.25.3-patched",
 			allTags:  []string{"1.25.3", "1.25.3-patched", "1.25.3-patched-1", "1.25.3-patched-2", "latest"},
-			expected: []string{"1.25.3-patched", "1.25.3-patched-1", "1.25.3-patched-2"},
+			expected: []string{"1.25.3-patched"},
 		},
 		{
-			name:     "only versioned tags (no base)",
+			name:     "only numbered variants, no exact base tag",
 			repo:     "registry.io/nginx",
 			baseTag:  "1.25.3-patched",
 			allTags:  []string{"1.25.3", "1.25.3-patched-1", "1.25.3-patched-3", "latest"},
-			expected: []string{"1.25.3-patched-1", "1.25.3-patched-3"},
+			expected: []string{},
 		},
 		{
-			name:     "tags sorted by version number",
-			repo:     "registry.io/nginx",
-			baseTag:  "1.25.3-patched",
-			allTags:  []string{"1.25.3-patched-10", "1.25.3-patched-2", "1.25.3-patched-1", "1.25.3-patched"},
-			expected: []string{"1.25.3-patched", "1.25.3-patched-1", "1.25.3-patched-2", "1.25.3-patched-10"},
-		},
-		{
-			name:     "custom template with special chars",
+			name:     "custom template exact match",
 			repo:     "registry.io/nginx",
 			baseTag:  "1.25.3-fixed",
 			allTags:  []string{"1.25.3-fixed", "1.25.3-fixed-1", "1.25.3-patched"},
-			expected: []string{"1.25.3-fixed", "1.25.3-fixed-1"},
+			expected: []string{"1.25.3-fixed"},
 		},
 	}
 
@@ -97,16 +90,16 @@ func TestDiscoverExistingPatchTags_ArchSuffixesExcluded(t *testing.T) {
 		expected []string
 	}{
 		{
-			name:    "386 arch tag excluded (numeric arch collision)",
-			baseTag: "3.18.0-patched",
-			allTags: []string{"3.18.0-patched", "3.18.0-patched-386", "3.18.0-patched-amd64", "3.18.0-patched-arm64"},
+			name:     "386 arch tag excluded (numeric arch collision)",
+			baseTag:  "3.18.0-patched",
+			allTags:  []string{"3.18.0-patched", "3.18.0-patched-386", "3.18.0-patched-amd64", "3.18.0-patched-arm64"},
 			expected: []string{"3.18.0-patched"},
 		},
 		{
-			name:    "versioned patch tag kept alongside arch tags",
-			baseTag: "3.18.0-patched",
-			allTags: []string{"3.18.0-patched", "3.18.0-patched-1", "3.18.0-patched-386", "3.18.0-patched-arm64"},
-			expected: []string{"3.18.0-patched", "3.18.0-patched-1"},
+			name:     "base tag only, arch and numbered tags excluded",
+			baseTag:  "3.18.0-patched",
+			allTags:  []string{"3.18.0-patched", "3.18.0-patched-1", "3.18.0-patched-386", "3.18.0-patched-arm64"},
+			expected: []string{"3.18.0-patched"},
 		},
 		{
 			name:    "all known arch suffixes excluded",
@@ -196,112 +189,23 @@ func TestLatestPatchTag(t *testing.T) {
 	tests := []struct {
 		name     string
 		tags     []string
-		baseTag  string
 		expected string
 	}{
 		{
 			name:     "empty list",
 			tags:     []string{},
-			baseTag:  "1.25.3-patched",
 			expected: "",
 		},
 		{
 			name:     "single base tag",
 			tags:     []string{"1.25.3-patched"},
-			baseTag:  "1.25.3-patched",
 			expected: "1.25.3-patched",
-		},
-		{
-			name:     "multiple versioned tags",
-			tags:     []string{"1.25.3-patched", "1.25.3-patched-1", "1.25.3-patched-2"},
-			baseTag:  "1.25.3-patched",
-			expected: "1.25.3-patched-2",
-		},
-		{
-			name:     "only versioned tags",
-			tags:     []string{"1.25.3-patched-1", "1.25.3-patched-5"},
-			baseTag:  "1.25.3-patched",
-			expected: "1.25.3-patched-5",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := latestPatchTag(tt.tags)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestNextPatchTag(t *testing.T) {
-	tests := []struct {
-		name         string
-		baseTag      string
-		existingTags []string
-		expected     string
-	}{
-		{
-			name:         "no existing tags",
-			baseTag:      "1.25.3-patched",
-			existingTags: []string{},
-			expected:     "1.25.3-patched",
-		},
-		{
-			name:         "only base tag exists",
-			baseTag:      "1.25.3-patched",
-			existingTags: []string{"1.25.3-patched"},
-			expected:     "1.25.3-patched-1",
-		},
-		{
-			name:         "base and version-1",
-			baseTag:      "1.25.3-patched",
-			existingTags: []string{"1.25.3-patched", "1.25.3-patched-1"},
-			expected:     "1.25.3-patched-2",
-		},
-		{
-			name:         "highest version is 3",
-			baseTag:      "1.25.3-patched",
-			existingTags: []string{"1.25.3-patched", "1.25.3-patched-1", "1.25.3-patched-3"},
-			expected:     "1.25.3-patched-4",
-		},
-		{
-			name:         "only versioned tags (no base)",
-			baseTag:      "1.25.3-patched",
-			existingTags: []string{"1.25.3-patched-2", "1.25.3-patched-5"},
-			expected:     "1.25.3-patched-6",
-		},
-		{
-			name:         "custom template",
-			baseTag:      "1.25.3-fixed",
-			existingTags: []string{"1.25.3-fixed", "1.25.3-fixed-1"},
-			expected:     "1.25.3-fixed-2",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := nextPatchTag(tt.baseTag, tt.existingTags)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestExtractVersionNumber(t *testing.T) {
-	tests := []struct {
-		tag      string
-		baseTag  string
-		expected int
-	}{
-		{"1.25.3-patched", "1.25.3-patched", 0},
-		{"1.25.3-patched-1", "1.25.3-patched", 1},
-		{"1.25.3-patched-10", "1.25.3-patched", 10},
-		{"1.25.3-patched-100", "1.25.3-patched", 100},
-		{"invalid-tag", "1.25.3-patched", 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.tag, func(t *testing.T) {
-			result := extractVersionNumber(tt.tag, tt.baseTag)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -491,7 +395,7 @@ func TestEvaluatePatchAction(t *testing.T) {
 			reportResult:     true, // has vulns
 			expectedSkip:     false,
 			expectedReason:   "new_vulnerabilities",
-			expectedResolved: "1.25.3-patched-1",
+			expectedResolved: "1.25.3-patched",
 		},
 		{
 			name:    "existing tag, report parse error",
@@ -504,7 +408,7 @@ func TestEvaluatePatchAction(t *testing.T) {
 			existingTags:     []string{"1.25.3-patched"},
 			reportError:      fmt.Errorf("invalid JSON"),
 			expectedSkip:     false,
-			expectedResolved: "1.25.3-patched-1",
+			expectedResolved: "1.25.3-patched",
 		},
 		{
 			name:             "existing tag, report not found in index",
@@ -514,7 +418,7 @@ func TestEvaluatePatchAction(t *testing.T) {
 			reports:          &reportIndex{refs: map[string]string{}}, // empty index
 			existingTags:     []string{"1.25.3-patched"},
 			expectedSkip:     false,
-			expectedResolved: "1.25.3-patched-1",
+			expectedResolved: "1.25.3-patched",
 		},
 		{
 			name:             "registry tag listing fails",
@@ -535,35 +439,7 @@ func TestEvaluatePatchAction(t *testing.T) {
 			reports:          nil, // nil index
 			existingTags:     []string{"1.25.3-patched"},
 			expectedSkip:     false,
-			expectedResolved: "1.25.3-patched-1",
-		},
-		{
-			name:    "multiple existing versions, no vulnerabilities",
-			repo:    "registry.io/nginx",
-			baseTag: "1.25.3-patched",
-			scanner: "trivy",
-			reports: &reportIndex{refs: map[string]string{
-				"registry.io/nginx:1.25.3-patched-2": "/tmp/reports/report1.json",
-			}},
-			existingTags:     []string{"1.25.3-patched", "1.25.3-patched-1", "1.25.3-patched-2"},
-			reportResult:     false,
-			expectedSkip:     true,
-			expectedReason:   "no fixable vulnerabilities",
-			expectedResolved: "1.25.3-patched-2", // latest tag
-		},
-		{
-			name:    "multiple existing versions, has vulnerabilities",
-			repo:    "registry.io/nginx",
-			baseTag: "1.25.3-patched",
-			scanner: "trivy",
-			reports: &reportIndex{refs: map[string]string{
-				"registry.io/nginx:1.25.3-patched-2": "/tmp/reports/report1.json",
-			}},
-			existingTags:     []string{"1.25.3-patched", "1.25.3-patched-1", "1.25.3-patched-2"},
-			reportResult:     true,
-			expectedSkip:     false,
-			expectedReason:   "new_vulnerabilities",
-			expectedResolved: "1.25.3-patched-3", // next version
+			expectedResolved: "1.25.3-patched",
 		},
 		{
 			name:    "custom scanner supported",

@@ -5,9 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -51,43 +48,14 @@ func discoverExistingPatchTags(repo, baseTag string) ([]string, error) {
 		return []string{}, nil
 	}
 
-	// Escape special regex characters in the base tag
-	escapedBase := regexp.QuoteMeta(baseTag)
-	// Match either the exact base tag or base tag followed by -N
-	pattern := fmt.Sprintf("^%s(?:-([0-9]+))?$", escapedBase)
-	re := regexp.MustCompile(pattern)
-
 	var matching []string
 	for _, tag := range allTags {
-		if re.MatchString(tag) && !isArchSpecificTag(tag, baseTag) {
+		if tag == baseTag && !isArchSpecificTag(tag, baseTag) {
 			matching = append(matching, tag)
 		}
 	}
 
-	// Sort by version number (ascending)
-	sort.Slice(matching, func(i, j int) bool {
-		verI := extractVersionNumber(matching[i], baseTag)
-		verJ := extractVersionNumber(matching[j], baseTag)
-		return verI < verJ
-	})
-
 	return matching, nil
-}
-
-// extractVersionNumber extracts the version number from a tag.
-// Returns 0 for the base tag, N for base-N tags.
-func extractVersionNumber(tag, baseTag string) int {
-	if tag == baseTag {
-		return 0
-	}
-	// Extract the number after the last dash
-	parts := strings.Split(tag, "-")
-	if len(parts) > 0 {
-		if num, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
-			return num
-		}
-	}
-	return 0
 }
 
 // latestPatchTag returns the tag with the highest version number from the list.
@@ -95,25 +63,7 @@ func latestPatchTag(tags []string) string {
 	if len(tags) == 0 {
 		return ""
 	}
-	// Tags are already sorted by version number, so return the last one
 	return tags[len(tags)-1]
-}
-
-// nextPatchTag computes the next version tag to use for re-patching.
-func nextPatchTag(baseTag string, existingTags []string) string {
-	if len(existingTags) == 0 {
-		return baseTag
-	}
-
-	maxVersion := 0
-	for _, tag := range existingTags {
-		ver := extractVersionNumber(tag, baseTag)
-		if ver > maxVersion {
-			maxVersion = ver
-		}
-	}
-
-	return fmt.Sprintf("%s-%d", baseTag, maxVersion+1)
 }
 
 // reportIndex maps normalized image references to report file paths.
@@ -245,15 +195,12 @@ func evaluatePatchAction(repo, baseTag, scanner string, reports *reportIndex, pk
 		}
 	}
 
-	// Compute the next version tag
-	nextTag := nextPatchTag(baseTag, existingTags)
-
 	// If no reports index provided, fail-open and proceed to patch
 	if reports == nil {
 		log.Debugf("No reports index provided, proceeding with patch for '%s'", repo)
 		return skipCheckResult{
 			ShouldSkip:  false,
-			ResolvedTag: nextTag,
+			ResolvedTag: baseTag,
 		}
 	}
 
@@ -268,7 +215,7 @@ func evaluatePatchAction(repo, baseTag, scanner string, reports *reportIndex, pk
 		log.Debugf("No report found for image '%s' in index, proceeding with patch (fail-open)", imageRef)
 		return skipCheckResult{
 			ShouldSkip:  false,
-			ResolvedTag: nextTag,
+			ResolvedTag: baseTag,
 		}
 	}
 
@@ -279,7 +226,7 @@ func evaluatePatchAction(repo, baseTag, scanner string, reports *reportIndex, pk
 		log.Warnf("Failed to parse report '%s': %v. Proceeding with patch (fail-open).", reportPath, err)
 		return skipCheckResult{
 			ShouldSkip:  false,
-			ResolvedTag: nextTag,
+			ResolvedTag: baseTag,
 		}
 	}
 
@@ -293,11 +240,11 @@ func evaluatePatchAction(repo, baseTag, scanner string, reports *reportIndex, pk
 		}
 	}
 
-	// Vulnerabilities found, proceed with patching using next version tag
-	log.Debugf("Fixable vulnerabilities found in report for '%s', re-patching with tag '%s'", imageRef, nextTag)
+	// Vulnerabilities found, proceed with patching using base tag (overwrite)
+	log.Debugf("Fixable vulnerabilities found in report for '%s', re-patching with tag '%s'", imageRef, baseTag)
 	return skipCheckResult{
 		ShouldSkip:  false,
 		Reason:      "new_vulnerabilities",
-		ResolvedTag: nextTag,
+		ResolvedTag: baseTag,
 	}
 }
