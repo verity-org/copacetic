@@ -111,27 +111,16 @@ For more information on source policies, see [Buildkit Source Policies](https://
 
 Yes, see [best practices](best-practices.md#dependabot) to learn more about using Dependabot with Copa patched images.
 
-## Why is bulk patching creating versioned tags like `1.25.3-patched-1`?
+## How does bulk patching decide whether to skip an image?
 
-When using [bulk image patching](./bulk-image-patching.md) with `--push`, Copa automatically avoids re-patching images that have no new vulnerabilities. When a re-patch is needed due to new vulnerabilities, Copa creates version-suffixed tags since registry tags are immutable:
+When using [bulk image patching](./bulk-image-patching.md) with `--push` and `-r`, Copa checks vulnerability reports to avoid unnecessary re-patching:
 
 ```
 nginx:1.25.3            ← original source image
-nginx:1.25.3-patched    ← initial patch (from 1.25.3)
-nginx:1.25.3-patched-1  ← first re-patch (from 1.25.3, not from 1.25.3-patched)
-nginx:1.25.3-patched-2  ← second re-patch (from 1.25.3, not from 1.25.3-patched-1)
+nginx:1.25.3-patched    ← patched image (overwritten on each re-patch)
 ```
 
 **Note**: Each re-patch is created from the **original source image** (e.g., `nginx:1.25.3`), not from the previous patched image. This ensures comprehensive updates and prevents layer buildup, consistent with Copa's architecture.
-
-This automatic versioning:
-- Saves time and compute by skipping unnecessary patches
-- Preserves existing tags (registry tags cannot be overwritten)
-- Provides a clear history of patch iterations
-- Ensures each patch is comprehensive (all updates from original)
-- Works with custom tag templates (e.g., `{{ .SourceTag }}-fixed`)
-
-## How does bulk patching decide whether to skip an image?
 
 Copa uses vulnerability reports you provide to decide whether re-patching is needed. Reports are matched by reading the `ArtifactName` field from inside each JSON file:
 
@@ -139,7 +128,7 @@ Copa uses vulnerability reports you provide to decide whether re-patching is nee
 2. **Existing patched tag exists**:
    - If `-r` provided: Looks up the vulnerability report by `ArtifactName`
      - Report shows no fixable vulnerabilities → skips patching (saves time)
-     - Report shows fixable vulnerabilities → re-patches with version-bumped tag
+     - Report shows fixable vulnerabilities → re-patches, overwriting the existing tag
      - Report not found (no matching `ArtifactName`) → proceeds with patching (fail-open)
    - If `-r` not provided: Always proceeds with patching
 

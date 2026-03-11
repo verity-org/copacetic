@@ -125,7 +125,7 @@ When you run `copa patch --config` with `--push` and `-r`:
 2. **Scan patched images**: Run your scanner (Trivy, etc.) on patched images and save reports to a directory
 3. **Subsequent runs with reports**: Copa checks vulnerability reports for existing patched images
    - If report shows no fixable vulnerabilities → skips patching (status: "Skipped")
-   - If report shows fixable vulnerabilities → re-patches **from the original source image** with version-bumped tag
+   - If report shows fixable vulnerabilities → re-patches **from the original source image**, overwriting the existing patched tag
    - If report not found → proceeds with patching (fail-open behavior)
 
 **Important**: Re-patches are always created from the original source image (not the previous patched image), ensuring comprehensive updates and preventing layer buildup. The skip feature saves time by avoiding this re-work when no new vulnerabilities are present.
@@ -196,25 +196,23 @@ The skip detection feature works with **any scanner that Copa supports** through
 
 Copa parses the vulnerability reports you provide, making it scanner-agnostic. This maintains separation of concerns: you control when and how scanning happens, Copa focuses on patching.
 
-### Tag Versioning
+### Re-Patching Behavior
 
-Since registry tags are immutable, re-patches use version-suffixed tags:
+When re-patching is needed, Copa overwrites the existing `-patched` tag with the new patch:
 
 ```
-1.25.3-patched      ← initial patch
-1.25.3-patched-1    ← first re-patch
-1.25.3-patched-2    ← second re-patch
+1.25.3-patched      ← initial patch (and all subsequent re-patches)
 ```
 
-This works with custom tag templates too (e.g., `{{ .SourceTag }}-fixed` → `1.25.3-fixed`, `1.25.3-fixed-1`, etc.).
+This works with custom tag templates too (e.g., `{{ .SourceTag }}-fixed` → `1.25.3-fixed`).
 
 ### Example Output
 
 ```
 NAME               STATUS    SOURCE IMAGE            PATCHED TAG        DETAILS
 nginx-test         Patched   registry/nginx:1.25.3   1.25.3-patched     OK
-alpine-test        Skipped   registry/alpine:3.19    3.19-patched-2     no fixable vulnerabilities
-ubuntu-test        Patched   registry/ubuntu:22.04   22.04-patched-3    OK
+alpine-test        Skipped   registry/alpine:3.19    3.19-patched       no fixable vulnerabilities
+ubuntu-test        Patched   registry/ubuntu:22.04   22.04-patched      OK
 ```
 
 ### Fail-Open Behavior
