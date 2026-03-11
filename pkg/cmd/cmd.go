@@ -42,7 +42,8 @@ type patchArgs struct {
 	exitOnEOL         bool
 	configFile        string
 	outputJSON        string
-	dryRun            bool
+	dryRun        bool
+	chartRegistry string
 }
 
 func NewPatchCmd() *cobra.Command {
@@ -102,6 +103,7 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 				ExitOnEOL:         ua.exitOnEOL,
 				ConfigFile:        ua.configFile,
 				DryRun:            ua.dryRun,
+				ChartRegistry:     ua.chartRegistry,
 			}
 
 			if ua.configFile == "" && ua.appImage == "" {
@@ -133,6 +135,7 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 	flags.StringVar(&ua.configFile, "config", "", "Path to a bulk patch YAML config file (Comprehensive update only). Cannot be used with --image or --tag.")
 	flags.StringVar(&ua.outputJSON, "output-json", "", "Write bulk patch results as JSON to the specified file path (bulk mode only)")
 	flags.BoolVar(&ua.dryRun, "dry-run", false, "Simulate bulk patching: run discovery and skip detection without patching (requires --config; use --output-json to capture results)")
+	flags.StringVar(&ua.chartRegistry, "chart-registry", "", "OCI registry to push patched wrapper charts (bulk mode only, e.g. oci://ghcr.io/myorg/charts)")
 	flags.StringVarP(&ua.appImage, "image", "i", "", "Application image name and tag to patch")
 	flags.StringVarP(&ua.report, "report", "r", "", "Vulnerability report file (single-image mode) or directory of reports for patched images (bulk mode)")
 	flags.StringVarP(&ua.patchedTag, "tag", "t", "", "Tag for the patched image")

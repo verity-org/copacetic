@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	helmchart "helm.sh/helm/v3/pkg/chart"
+	helmregistry "helm.sh/helm/v3/pkg/registry"
 )
 
 func TestWriteJSONResults(t *testing.T) {
@@ -700,4 +701,132 @@ func TestMergeTarget(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestGenerateAndPushPatchedCharts(t *testing.T) {
+	// Mock SaveChart and PushChart
+	origSave := helm.SaveChart
+	origPush := helm.PushChart
+	t.Cleanup(func() {
+		helm.SaveChart = origSave
+		helm.PushChart = origPush
+	})
+
+	var pushedRef string
+	var pushedData []byte
+	helm.SaveChart = func(ch *helmchart.Chart, outDir string) (string, error) {
+		fakePath := filepath.Join(outDir, ch.Name()+"-"+ch.Metadata.Version+".tgz")
+		_ = os.WriteFile(fakePath, []byte("fake-chart-data"), 0o600)
+		return fakePath, nil
+	}
+	helm.PushChart = func(data []byte, ref string) (*helmregistry.PushResult, error) {
+		pushedData = data
+		pushedRef = ref
+		return &helmregistry.PushResult{Ref: ref}, nil
+	}
+
+	resolutions := []chartResolution{
+		{
+			Spec: ChartSpec{
+				Name:       "vector",
+				Version:    "0.53.0",
+				Repository: "oci://ghcr.io/vectordotdev/helm",
+			},
+			Chart: &helmchart.Chart{
+				Metadata: &helmchart.Metadata{
+					APIVersion: "v2",
+					Name:       "vector",
+					Version:    "0.53.0",
+				},
+				Values: map[string]interface{}{
+					"image": map[string]interface{}{
+						"repository": "timberio/vector",
+						"tag":        "0.53.0-distroless-libc",
+					},
+				},
+			},
+			Images: []helm.ChartImage{
+				{Repository: "docker.io/timberio/vector", Tag: "0.53.0-debian"},
+			},
+		},
+	}
+
+	mappings := []chartImageMapping{
+		{
+			ChartName:    "vector",
+			OriginalRepo: "docker.io/timberio/vector",
+			OriginalTag:  "0.53.0-debian",
+			PatchedRepo:  "ghcr.io/myorg/vector",
+			PatchedTag:   "0.53.0-debian-patched",
+		},
+	}
+
+	config := PatchConfig{
+		ChartTarget: &ChartTargetSpec{Registry: "oci://ghcr.io/myorg/charts"},
+	}
+
+	err := generateAndPushPatchedCharts(resolutions, mappings, config)
+	require.NoError(t, err)
+
+	// Verify push was called with correct ref
+	assert.Equal(t, "oci://ghcr.io/myorg/charts/vector-patched:0.53.0-patched.1", pushedRef)
+	assert.Equal(t, []byte("fake-chart-data"), pushedData)
+}
+
+func TestGenerateAndPushPatchedCharts_NoMappings(t *testing.T) {
+	resolutions := []chartResolution{
+		{
+			Spec:  ChartSpec{Name: "empty", Version: "1.0.0", Repository: "oci://example.com"},
+			Chart: &helmchart.Chart{Metadata: &helmchart.Metadata{APIVersion: "v2", Name: "empty", Version: "1.0.0"}},
+			Images: []helm.ChartImage{{Repository: "nginx", Tag: "1.25.0"}},
+		},
+	}
+
+	config := PatchConfig{
+		ChartTarget: &ChartTargetSpec{Registry: "oci://ghcr.io/myorg/charts"},
+	}
+
+	// No mappings = no charts should be generated
+	err := generateAndPushPatchedCharts(resolutions, nil, config)
+	require.NoError(t, err)
+}
+
+func TestGenerateAndPushPatchedCharts_NilChartTarget(t *testing.T) {
+	err := generateAndPushPatchedCharts(nil, nil, PatchConfig{})
+	require.NoError(t, err)
+}
+
+func TestFilterMappingsForChart(t *testing.T) {
+	res := chartResolution{
+		Images: []helm.ChartImage{
+			{Repository: "nginx", Tag: "1.25.0"},
+			{Repository: "redis", Tag: "7.2.0"},
+		},
+	}
+
+	mappings := []chartImageMapping{
+		{OriginalRepo: "nginx", PatchedRepo: "ghcr.io/org/nginx"},
+		{OriginalRepo: "redis", PatchedRepo: "ghcr.io/org/redis"},
+		{OriginalRepo: "postgres", PatchedRepo: "ghcr.io/org/postgres"}, // unrelated
+	}
+
+	filtered := filterMappingsForChart(res, mappings)
+	assert.Len(t, filtered, 2)
+	assert.Equal(t, "nginx", filtered[0].OriginalRepo)
+	assert.Equal(t, "redis", filtered[1].OriginalRepo)
+}
+
+func TestFilterMappingsForChart_SuffixMatch(t *testing.T) {
+	res := chartResolution{
+		Images: []helm.ChartImage{
+			{Repository: "timberio/vector", Tag: "0.53.0"},
+		},
+	}
+
+	mappings := []chartImageMapping{
+		{OriginalRepo: "docker.io/timberio/vector", PatchedRepo: "ghcr.io/org/vector"},
+	}
+
+	filtered := filterMappingsForChart(res, mappings)
+	assert.Len(t, filtered, 1)
 }
