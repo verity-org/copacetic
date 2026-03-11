@@ -138,13 +138,13 @@ func imageMatchesValue(imageRepo, valueRepo string) bool {
 }
 
 // matchExplicitPath finds the explicit value path for an image repository,
-// using the same matching logic as override keys (exact or suffix match).
+// using the shared MatchRepositoryPattern logic (exact or suffix match).
 func matchExplicitPath(imageRepo string, explicitPaths map[string]string) (string, bool) {
 	if path, ok := explicitPaths[imageRepo]; ok {
 		return path, true
 	}
 	for key, path := range explicitPaths {
-		if strings.HasSuffix(imageRepo, "/"+key) {
+		if MatchRepositoryPattern(imageRepo, key) {
 			return path, true
 		}
 	}

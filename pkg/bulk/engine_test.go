@@ -613,6 +613,33 @@ images:
 	}
 }
 
+func TestPatchFromConfig_InvalidCLIChartRegistry(t *testing.T) {
+	configContent := `
+apiVersion: copa.sh/v1alpha1
+kind: PatchConfig
+images:
+  - name: nginx
+    image: docker.io/library/nginx
+    tags:
+      strategy: list
+      list: ["1.25.0"]
+`
+	configPath := filepath.Join(t.TempDir(), "copa-config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
+
+	opts := &types.Options{
+		DryRun:            true,
+		Scanner:           "trivy",
+		PkgTypes:          "os",
+		LibraryPatchLevel: "patch",
+		ChartRegistry:     "https://not-oci.example.com",
+	}
+
+	err := PatchFromConfig(context.Background(), configPath, opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "oci://")
+}
+
 func TestMergeTarget(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -805,9 +832,9 @@ func TestFilterMappingsForChart(t *testing.T) {
 	}
 
 	mappings := []chartImageMapping{
-		{OriginalRepo: "nginx", PatchedRepo: "ghcr.io/org/nginx"},
-		{OriginalRepo: "redis", PatchedRepo: "ghcr.io/org/redis"},
-		{OriginalRepo: "postgres", PatchedRepo: "ghcr.io/org/postgres"}, // unrelated
+		{OriginalRepo: "nginx", OriginalTag: "1.25.0", PatchedRepo: "ghcr.io/org/nginx"},
+		{OriginalRepo: "redis", OriginalTag: "7.2.0", PatchedRepo: "ghcr.io/org/redis"},
+		{OriginalRepo: "postgres", OriginalTag: "15.0", PatchedRepo: "ghcr.io/org/postgres"}, // unrelated
 	}
 
 	filtered := filterMappingsForChart(res, mappings)
@@ -824,9 +851,28 @@ func TestFilterMappingsForChart_SuffixMatch(t *testing.T) {
 	}
 
 	mappings := []chartImageMapping{
-		{OriginalRepo: "docker.io/timberio/vector", PatchedRepo: "ghcr.io/org/vector"},
+		{OriginalRepo: "docker.io/timberio/vector", OriginalTag: "0.53.0", PatchedRepo: "ghcr.io/org/vector"},
 	}
 
 	filtered := filterMappingsForChart(res, mappings)
 	assert.Len(t, filtered, 1)
+}
+
+func TestFilterMappingsForChart_RepoMatchButTagMismatch(t *testing.T) {
+	// Two charts share the same repo but different tags. Only the matching tag should be included.
+	res := chartResolution{
+		Images: []helm.ChartImage{
+			{Repository: "example.com/foo", Tag: "1.0.0"},
+		},
+	}
+
+	mappings := []chartImageMapping{
+		{OriginalRepo: "example.com/foo", OriginalTag: "1.0.0", PatchedRepo: "ghcr.io/org/foo", PatchedTag: "1.0.0-patched"},
+		{OriginalRepo: "example.com/foo", OriginalTag: "2.0.0", PatchedRepo: "ghcr.io/org/foo", PatchedTag: "2.0.0-patched"}, // from another chart
+	}
+
+	filtered := filterMappingsForChart(res, mappings)
+	require.Len(t, filtered, 1)
+	assert.Equal(t, "1.0.0", filtered[0].OriginalTag)
+	assert.Equal(t, "1.0.0-patched", filtered[0].PatchedTag)
 }

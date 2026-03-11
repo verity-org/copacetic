@@ -131,6 +131,9 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 	// If --chart-registry is set via CLI but no chartTarget in config, create one.
 	if opts.ChartRegistry != "" && config.ChartTarget == nil {
 		config.ChartTarget = &ChartTargetSpec{Registry: opts.ChartRegistry}
+		if err := validateChartTarget(config.ChartTarget); err != nil {
+			return fmt.Errorf("invalid --chart-registry flag: %w", err)
+		}
 	}
 
 	// Resolve chart images and merge with explicitly-listed images.
@@ -601,7 +604,10 @@ func generateAndPushPatchedCharts(resolutions []chartResolution, mappings []char
 
 		// Resolve value paths using auto-detection + explicit overrides
 		valuePaths := helm.ResolveImageValuePaths(res.Chart.Values, res.Images, explicitPaths)
-
+		if len(valuePaths) == 0 {
+			log.Warnf("No value paths detected for chart '%s' — auto-detection failed for all images. Skipping chart generation. Use overrides.valuePath to specify paths manually.", res.Spec.Name)
+			continue
+		}
 		// Build the wrapper chart
 		helmMappings := toHelmImageMappings(chartMappings)
 		spec := helm.ChartSourceSpec{
@@ -636,23 +642,27 @@ func generateAndPushPatchedCharts(resolutions []chartResolution, mappings []char
 }
 
 // filterMappingsForChart returns only the image mappings that correspond to images
-// discovered from a specific chart.
+// discovered from a specific chart, matching by both repository and tag to prevent
+// cross-chart pollution when multiple charts reference the same repo with different tags.
 func filterMappingsForChart(res chartResolution, mappings []chartImageMapping) []chartImageMapping {
-	// Build a set of image repos from this chart's discovered images
-	chartImageRepos := make(map[string]bool)
+	// Build a set of repo+tag pairs from this chart's discovered images
+	type repoTag struct{ repo, tag string }
+	chartImages := make(map[repoTag]bool)
 	for _, img := range res.Images {
-		chartImageRepos[img.Repository] = true
+		chartImages[repoTag{repo: img.Repository, tag: img.Tag}] = true
 	}
 
 	var filtered []chartImageMapping
 	for _, m := range mappings {
-		if chartImageRepos[m.OriginalRepo] {
+		// Exact repo+tag match
+		if chartImages[repoTag{repo: m.OriginalRepo, tag: m.OriginalTag}] {
 			filtered = append(filtered, m)
 			continue
 		}
-		// Also try suffix matching (chart has short repo, mapping has full registry)
-		for repo := range chartImageRepos {
-			if strings.HasSuffix(m.OriginalRepo, "/"+repo) || strings.HasSuffix(repo, "/"+m.OriginalRepo) {
+		// Suffix repo match + tag match (handles registry prefix differences)
+		for _, img := range res.Images {
+			if m.OriginalTag == img.Tag &&
+				(strings.HasSuffix(m.OriginalRepo, "/"+img.Repository) || strings.HasSuffix(img.Repository, "/"+m.OriginalRepo)) {
 				filtered = append(filtered, m)
 				break
 			}
