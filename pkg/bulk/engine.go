@@ -662,7 +662,7 @@ func filterMappingsForChart(res chartResolution, mappings []chartImageMapping) [
 		// Suffix repo match + tag match (handles registry prefix differences)
 		for _, img := range res.Images {
 			if m.OriginalTag == img.Tag &&
-				(strings.HasSuffix(m.OriginalRepo, "/"+img.Repository) || strings.HasSuffix(img.Repository, "/"+m.OriginalRepo)) {
+				(helm.MatchRepositoryPattern(m.OriginalRepo, img.Repository) || helm.MatchRepositoryPattern(img.Repository, m.OriginalRepo)) {
 				filtered = append(filtered, m)
 				break
 			}
