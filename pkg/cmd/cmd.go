@@ -131,8 +131,8 @@ copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vect
 				return errors.New("--image, --config, and --chart are mutually exclusive")
 			}
 
-			if ua.dryRun && !hasConfig {
-				return errors.New("--dry-run requires --config")
+			if ua.dryRun && !hasConfig && !hasChart {
+				return errors.New("--dry-run requires --config or --chart")
 			}
 
 			// Bulk config mode
@@ -164,7 +164,7 @@ copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vect
 	flags := patchCmd.Flags()
 	flags.StringVar(&ua.configFile, "config", "", "Path to a bulk patch YAML config file (Comprehensive update only). Cannot be used with --image or --tag.")
 	flags.StringVar(&ua.outputJSON, "output-json", "", "Write bulk patch results as JSON to the specified file path (bulk mode only)")
-	flags.BoolVar(&ua.dryRun, "dry-run", false, "Simulate bulk patching: run discovery and skip detection without patching (requires --config; use --output-json to capture results)")
+	flags.BoolVar(&ua.dryRun, "dry-run", false, "Simulate patching: discover images and compute targets without patching (requires --config or --chart; use --output-json to capture results)")
 	flags.StringVar(&ua.chartRegistry, "chart-registry", "", "OCI registry to push patched wrapper charts (e.g. oci://ghcr.io/myorg/charts)")
 	flags.StringVar(&ua.chartName, "chart", "", "Helm chart name for single chart patching mode")
 	flags.StringVar(&ua.chartVersion, "chart-version", "", "Helm chart version (required with --chart)")

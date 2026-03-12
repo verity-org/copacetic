@@ -2,6 +2,7 @@ package bulk
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,13 +42,23 @@ func TestValidateChartOpts(t *testing.T) {
 			wantErr: "chart repository is required",
 		},
 		{
-			name:    "missing chart registry",
+			name:    "missing chart registry (non-dry-run)",
 			opts:    &types.Options{ChartName: "v", ChartVersion: "1.0", ChartRepo: "oci://x"},
 			wantErr: "chart registry is required",
 		},
 		{
 			name:    "non-oci chart registry",
 			opts:    &types.Options{ChartName: "v", ChartVersion: "1.0", ChartRepo: "oci://x", ChartRegistry: "https://bad"},
+			wantErr: "oci://",
+		},
+		{
+			name:    "dry-run allows missing chart registry",
+			opts:    &types.Options{ChartName: "v", ChartVersion: "1.0", ChartRepo: "oci://x", DryRun: true},
+			wantErr: "",
+		},
+		{
+			name:    "dry-run still rejects non-oci registry",
+			opts:    &types.Options{ChartName: "v", ChartVersion: "1.0", ChartRepo: "oci://x", ChartRegistry: "https://bad", DryRun: true},
 			wantErr: "oci://",
 		},
 	}
@@ -355,4 +366,125 @@ func TestPatchChart_Validates(t *testing.T) {
 	err := PatchChart(context.Background(), &types.Options{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "chart name is required")
+}
+
+func TestPatchChart_DryRun(t *testing.T) {
+	origDownload := helm.DownloadChart
+	origRender := helm.RenderChart
+	t.Cleanup(func() {
+		helm.DownloadChart = origDownload
+		helm.RenderChart = origRender
+	})
+
+	helm.DownloadChart = func(name, version, repository string) (*helmchart.Chart, error) {
+		return &helmchart.Chart{
+			Metadata: &helmchart.Metadata{Name: name, Version: version},
+			Values: map[string]interface{}{
+				"image": map[string]interface{}{
+					"repository": "nginx",
+					"tag":        "1.25.0",
+				},
+			},
+		}, nil
+	}
+	helm.RenderChart = func(ch *helmchart.Chart) (string, error) {
+		return `
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - image: nginx:1.25.0
+        - image: redis:7.0
+`, nil
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "results.json")
+
+	opts := &types.Options{
+		ChartName:     "mychart",
+		ChartVersion:  "1.0.0",
+		ChartRepo:     "oci://ghcr.io/charts",
+		ChartRegistry: "oci://ghcr.io/myorg/charts",
+		DryRun:        true,
+		OutputJSON:    outputPath,
+	}
+
+	err := PatchChart(context.Background(), opts)
+	require.NoError(t, err)
+
+	// Verify JSON output was written
+	data, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+
+	var results []patchJobResult
+	require.NoError(t, json.Unmarshal(data, &results))
+
+	// Should have 2 images discovered
+	require.Len(t, results, 2)
+	for _, r := range results {
+		assert.Equal(t, "WouldPatch", r.Status)
+		assert.Equal(t, "mychart", r.Name)
+	}
+
+	// Verify source/target format
+	sources := make(map[string]string)
+	for _, r := range results {
+		sources[r.Source] = r.Target
+	}
+	assert.Equal(t, "ghcr.io/myorg/charts/nginx:1.25.0-patched", sources["nginx:1.25.0"])
+	assert.Equal(t, "ghcr.io/myorg/charts/redis:7.0-patched", sources["redis:7.0"])
+}
+
+func TestPatchChart_DryRun_NoRegistry(t *testing.T) {
+	origDownload := helm.DownloadChart
+	origRender := helm.RenderChart
+	t.Cleanup(func() {
+		helm.DownloadChart = origDownload
+		helm.RenderChart = origRender
+	})
+
+	helm.DownloadChart = func(name, version, repository string) (*helmchart.Chart, error) {
+		return &helmchart.Chart{
+			Metadata: &helmchart.Metadata{Name: name, Version: version},
+		}, nil
+	}
+	helm.RenderChart = func(ch *helmchart.Chart) (string, error) {
+		return `
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - image: nginx:1.25.0
+`, nil
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "results.json")
+
+	// Dry-run without --chart-registry: images stay at their source repos
+	opts := &types.Options{
+		ChartName:    "mychart",
+		ChartVersion: "1.0.0",
+		ChartRepo:    "oci://ghcr.io/charts",
+		DryRun:       true,
+		OutputJSON:   outputPath,
+	}
+
+	err := PatchChart(context.Background(), opts)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+
+	var results []patchJobResult
+	require.NoError(t, json.Unmarshal(data, &results))
+
+	require.Len(t, results, 1)
+	assert.Equal(t, "WouldPatch", results[0].Status)
+	assert.Equal(t, "nginx:1.25.0", results[0].Source)
+	// Without registry override, target uses source repo
+	assert.Equal(t, "nginx:1.25.0-patched", results[0].Target)
 }

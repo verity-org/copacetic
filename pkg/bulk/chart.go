@@ -16,6 +16,14 @@ var patchImage = func(ctx context.Context, opts *types.Options) error {
 	return patch.Patch(ctx, opts)
 }
 
+// imageRef holds a computed original→patched image reference pair.
+type imageRef struct {
+	originalRepo string
+	originalTag  string
+	targetRepo   string
+	targetTag    string
+}
+
 // PatchChart orchestrates patching all images discovered from a single Helm chart
 // and generating a patched wrapper chart pushed to an OCI registry.
 //
@@ -53,7 +61,7 @@ func PatchChart(ctx context.Context, opts *types.Options) error {
 	res := resolutions[0]
 	log.Infof("Discovered %d image(s) in chart '%s'", len(res.Images), chartSpec.Name)
 
-	// Step 2: Patch each discovered image sequentially.
+	// Step 2: Compute target image refs for each discovered image.
 	// Strip the oci:// prefix from the chart registry to get a valid container image registry.
 	// ChartRegistry keeps oci:// for Helm push operations; image refs must not have it.
 	imageRegistry := strings.TrimPrefix(opts.ChartRegistry, "oci://")
@@ -61,10 +69,8 @@ func PatchChart(ctx context.Context, opts *types.Options) error {
 		Registry: imageRegistry,
 	}
 
-	var mappings []chartImageMapping
+	var refs []imageRef
 	for _, img := range res.Images {
-		imageWithTag := fmt.Sprintf("%s:%s", img.Repository, img.Tag)
-
 		targetRepo, err := buildTargetRepository(img.Repository, target.Registry)
 		if err != nil {
 			log.Errorf("Failed to build target repository for '%s': %v", img.Repository, err)
@@ -83,7 +89,24 @@ func PatchChart(ctx context.Context, opts *types.Options) error {
 			continue
 		}
 
-		patchedImageRef := fmt.Sprintf("%s:%s", targetRepo, targetTag)
+		refs = append(refs, imageRef{
+			originalRepo: img.Repository,
+			originalTag:  img.Tag,
+			targetRepo:   targetRepo,
+			targetTag:    targetTag,
+		})
+	}
+
+	// Dry-run: report what would be patched and exit.
+	if opts.DryRun {
+		return chartDryRun(refs, chartSpec, opts)
+	}
+
+	// Step 3: Patch each discovered image sequentially.
+	var mappings []chartImageMapping
+	for _, ref := range refs {
+		imageWithTag := fmt.Sprintf("%s:%s", ref.originalRepo, ref.originalTag)
+		patchedImageRef := fmt.Sprintf("%s:%s", ref.targetRepo, ref.targetTag)
 
 		log.Infof("Patching image %s → %s...", imageWithTag, patchedImageRef)
 
@@ -104,10 +127,10 @@ func PatchChart(ctx context.Context, opts *types.Options) error {
 		log.Infof("Successfully patched %s → %s", imageWithTag, patchedImageRef)
 		mappings = append(mappings, chartImageMapping{
 			ChartName:    chartSpec.Name,
-			OriginalRepo: img.Repository,
-			OriginalTag:  img.Tag,
-			PatchedRepo:  targetRepo,
-			PatchedTag:   targetTag,
+			OriginalRepo: ref.originalRepo,
+			OriginalTag:  ref.originalTag,
+			PatchedRepo:  ref.targetRepo,
+			PatchedTag:   ref.targetTag,
 		})
 	}
 
@@ -116,7 +139,7 @@ func PatchChart(ctx context.Context, opts *types.Options) error {
 		return nil
 	}
 
-	// Step 3: Generate and push the patched wrapper chart.
+	// Step 4: Generate and push the patched wrapper chart.
 	config := PatchConfig{
 		ChartTarget: &ChartTargetSpec{Registry: opts.ChartRegistry},
 	}
@@ -138,11 +161,41 @@ func validateChartOpts(opts *types.Options) error {
 	if opts.ChartRepo == "" {
 		return fmt.Errorf("chart repository is required")
 	}
-	if opts.ChartRegistry == "" {
-		return fmt.Errorf("chart registry is required (--chart-registry)")
-	}
-	if !strings.HasPrefix(opts.ChartRegistry, "oci://") {
+	if !opts.DryRun {
+		if opts.ChartRegistry == "" {
+			return fmt.Errorf("chart registry is required (--chart-registry)")
+		}
+		if !strings.HasPrefix(opts.ChartRegistry, "oci://") {
+			return fmt.Errorf("chart registry must start with 'oci://' (got %q)", opts.ChartRegistry)
+		}
+	} else if opts.ChartRegistry != "" && !strings.HasPrefix(opts.ChartRegistry, "oci://") {
 		return fmt.Errorf("chart registry must start with 'oci://' (got %q)", opts.ChartRegistry)
 	}
+	return nil
+}
+
+// chartDryRun prints a summary of what would be patched and optionally writes JSON results.
+func chartDryRun(refs []imageRef, chartSpec ChartSpec, opts *types.Options) error {
+	var results []patchJobStatus
+	for _, ref := range refs {
+		source := fmt.Sprintf("%s:%s", ref.originalRepo, ref.originalTag)
+		target := fmt.Sprintf("%s:%s", ref.targetRepo, ref.targetTag)
+		results = append(results, patchJobStatus{
+			Name:   chartSpec.Name,
+			Source: source,
+			Target: target,
+			Status: "WouldPatch",
+		})
+	}
+
+	printSummary(results)
+
+	if opts.OutputJSON != "" {
+		if err := writeJSONResults(opts.OutputJSON, results); err != nil {
+			return fmt.Errorf("failed to write dry-run results: %w", err)
+		}
+		log.Infof("Dry-run results written to %s", opts.OutputJSON)
+	}
+
 	return nil
 }
