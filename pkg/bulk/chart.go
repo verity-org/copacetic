@@ -54,11 +54,12 @@ func PatchChart(ctx context.Context, opts *types.Options) error {
 	log.Infof("Discovered %d image(s) in chart '%s'", len(res.Images), chartSpec.Name)
 
 	// Step 2: Patch each discovered image sequentially.
+	// Strip the oci:// prefix from the chart registry to get a valid container image registry.
+	// ChartRegistry keeps oci:// for Helm push operations; image refs must not have it.
+	imageRegistry := strings.TrimPrefix(opts.ChartRegistry, "oci://")
 	target := TargetSpec{
-		Registry: opts.ChartRegistry, // Reuse chart registry as image target when no explicit target
+		Registry: imageRegistry,
 	}
-	// If the user provided a separate image target registry, use it; otherwise images go
-	// to the same registry domain as the chart (this is a reasonable default).
 
 	var mappings []chartImageMapping
 	for _, img := range res.Images {

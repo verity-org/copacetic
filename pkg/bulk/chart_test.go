@@ -135,7 +135,7 @@ spec:
 	// Verify image was patched
 	require.Len(t, patchedImages, 1)
 	assert.Contains(t, patchedImages[0], "redis:7.0")
-	assert.Contains(t, patchedImages[0], "oci://ghcr.io/myorg/charts/redis:7.0-patched")
+	assert.Contains(t, patchedImages[0], "ghcr.io/myorg/charts/redis:7.0-patched")
 
 	// Verify chart was pushed
 	assert.Equal(t, "oci://ghcr.io/myorg/charts/mychart-patched:1.0.0-patched.1", pushedRef)
