@@ -30,6 +30,16 @@ func ApplyOverrides(images []ChartImage, overrides map[string]OverrideSpec) []Ch
 	return result
 }
 
+// MatchRepositoryPattern checks if a repository matches a pattern key using
+// exact match first, then suffix matching to handle registry prefixes.
+// For example, pattern "nginx" matches repository "docker.io/library/nginx".
+func MatchRepositoryPattern(repository, pattern string) bool {
+	if repository == pattern {
+		return true
+	}
+	return strings.HasSuffix(repository, "/"+pattern)
+}
+
 // matchOverride finds the override that applies to the given image repository.
 // It tries an exact map key match first, then a suffix match to handle registry prefixes.
 func matchOverride(repository string, overrides map[string]OverrideSpec) (OverrideSpec, bool) {
@@ -37,7 +47,7 @@ func matchOverride(repository string, overrides map[string]OverrideSpec) (Overri
 		return o, true
 	}
 	for key, o := range overrides {
-		if strings.HasSuffix(repository, "/"+key) {
+		if MatchRepositoryPattern(repository, key) {
 			return o, true
 		}
 	}

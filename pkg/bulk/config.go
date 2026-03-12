@@ -21,18 +21,25 @@ type ChartSpec struct {
 // OverrideSpec defines a tag variant substitution for chart-discovered images.
 // From and To are substrings of the image tag (e.g., From: "distroless-libc", To: "debian").
 type OverrideSpec struct {
-	From string `yaml:"from"`
-	To   string `yaml:"to"`
+	From      string `yaml:"from"`
+	To        string `yaml:"to"`
+	ValuePath string `yaml:"valuePath,omitempty"` // Explicit values.yaml path for image override (e.g. "controller.image")
 }
 
 // PatchConfig represents the top-level structure for the bulk patching configuration.
 type PatchConfig struct {
-	APIVersion string                  `yaml:"apiVersion"`
-	Kind       string                  `yaml:"kind"`
-	Target     TargetSpec              `yaml:"target,omitempty"`   // Default target for all images
-	Charts     []ChartSpec             `yaml:"charts,omitempty"`   // Helm charts to discover images from
-	Overrides  map[string]OverrideSpec `yaml:"overrides,omitempty"` // Tag variant overrides for chart images
-	Images     []ImageSpec             `yaml:"images,omitempty"`   // Explicitly listed images
+	APIVersion  string                  `yaml:"apiVersion"`
+	Kind        string                  `yaml:"kind"`
+	Target      TargetSpec              `yaml:"target,omitempty"`      // Default target for all images
+	Charts      []ChartSpec             `yaml:"charts,omitempty"`      // Helm charts to discover images from
+	ChartTarget *ChartTargetSpec        `yaml:"chartTarget,omitempty"` // Where to push patched wrapper charts
+	Overrides   map[string]OverrideSpec `yaml:"overrides,omitempty"`   // Tag variant overrides for chart images
+	Images      []ImageSpec             `yaml:"images,omitempty"`      // Explicitly listed images
+}
+
+// ChartTargetSpec defines where to push patched wrapper charts.
+	type ChartTargetSpec struct {
+	Registry string `yaml:"registry"` // OCI registry for patched charts (e.g. "oci://ghcr.io/myorg/charts")
 }
 
 // ImageSpec defines the configuration for patching a single image.
@@ -94,6 +101,20 @@ func validateOverrides(overrides map[string]OverrideSpec) error {
 		if o.To == "" {
 			return fmt.Errorf("overrides[%q]: to is required", key)
 		}
+	}
+	return nil
+}
+
+// validateChartTarget validates the ChartTargetSpec if present.
+func validateChartTarget(ct *ChartTargetSpec) error {
+	if ct == nil {
+		return nil
+	}
+	if ct.Registry == "" {
+		return fmt.Errorf("chartTarget.registry is required")
+	}
+	if !strings.HasPrefix(ct.Registry, "oci://") {
+		return fmt.Errorf("chartTarget.registry must start with 'oci://' (got %q)", ct.Registry)
 	}
 	return nil
 }

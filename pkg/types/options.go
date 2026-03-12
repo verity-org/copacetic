@@ -63,4 +63,7 @@ type Options struct {
 	// EOL configuration
 	EOLAPIBaseURL string
 	ExitOnEOL     bool
+
+	// Chart patching
+	ChartRegistry string // OCI registry for pushing patched wrapper charts (bulk mode only)
 }
