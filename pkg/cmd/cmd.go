@@ -42,8 +42,11 @@ type patchArgs struct {
 	exitOnEOL         bool
 	configFile        string
 	outputJSON        string
-	dryRun        bool
-	chartRegistry string
+	dryRun            bool
+	chartRegistry     string
+	chartName         string
+	chartVersion      string
+	chartRepo         string
 }
 
 func NewPatchCmd() *cobra.Command {
@@ -52,7 +55,8 @@ func NewPatchCmd() *cobra.Command {
 		Use:   "patch",
 		Short: "Patch container image(s) with upgrade packages specified by a vulnerability report or by comprehensive update",
 		Example: `copa patch -i images/python:3.7-alpine -r trivy.json -t 3.7-alpine-patched (Single Image Patching)
-copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
+copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)
+copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vectordotdev/helm --chart-registry oci://ghcr.io/myorg/charts (Single Chart Patching)`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			// Validate library patch level
 			if err := validateLibraryPatchLevel(ua.libraryPatchLevel, ua.pkgTypes); err != nil {
@@ -104,29 +108,55 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 				ConfigFile:        ua.configFile,
 				DryRun:            ua.dryRun,
 				ChartRegistry:     ua.chartRegistry,
+				ChartName:         ua.chartName,
+				ChartVersion:      ua.chartVersion,
+				ChartRepo:         ua.chartRepo,
 			}
 
-			if ua.configFile == "" && ua.appImage == "" {
-				return errors.New("either --config or --image must be provided")
+			// Determine mode: config (bulk), chart (single chart), or image (single image)
+			hasChart := ua.chartName != ""
+			hasConfig := ua.configFile != ""
+			hasImage := ua.appImage != ""
+
+			// Mutual exclusion
+			modeCount := 0
+			if hasChart { modeCount++ }
+			if hasConfig { modeCount++ }
+			if hasImage { modeCount++ }
+
+			if modeCount == 0 {
+				return errors.New("one of --image, --config, or --chart must be provided")
+			}
+			if modeCount > 1 {
+				return errors.New("--image, --config, and --chart are mutually exclusive")
 			}
 
-			if ua.dryRun && ua.configFile == "" {
+			if ua.dryRun && !hasConfig {
 				return errors.New("--dry-run requires --config")
 			}
 
-			// bulk patch
-			if ua.configFile != "" {
-				if ua.appImage != "" || ua.patchedTag != "" {
-					return errors.New("--config cannot be used with --image or --tag")
+			// Bulk config mode
+			if hasConfig {
+				if ua.patchedTag != "" {
+					return errors.New("--config cannot be used with --tag")
 				}
-
 				log.Info("Starting in bulk image patching mode...")
-
 				return bulk.PatchFromConfig(context.Background(), ua.configFile, opts)
 			}
-			if ua.appImage == "" {
-				return errors.New("--image is required when not using --config")
+
+			// Single chart mode
+			if hasChart {
+				if ua.chartVersion == "" || ua.chartRepo == "" {
+					return errors.New("--chart requires --chart-version and --chart-repo")
+				}
+				if ua.chartRegistry == "" {
+					return errors.New("--chart requires --chart-registry to push the patched wrapper chart")
+				}
+				log.Info("Starting in single chart patching mode...")
+				return bulk.PatchChart(ctx, opts)
 			}
+
+			// Single image mode
 			log.Info("Starting in single image patching mode...")
 			return patch.Patch(ctx, opts)
 		},
@@ -135,7 +165,10 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 	flags.StringVar(&ua.configFile, "config", "", "Path to a bulk patch YAML config file (Comprehensive update only). Cannot be used with --image or --tag.")
 	flags.StringVar(&ua.outputJSON, "output-json", "", "Write bulk patch results as JSON to the specified file path (bulk mode only)")
 	flags.BoolVar(&ua.dryRun, "dry-run", false, "Simulate bulk patching: run discovery and skip detection without patching (requires --config; use --output-json to capture results)")
-	flags.StringVar(&ua.chartRegistry, "chart-registry", "", "OCI registry to push patched wrapper charts (bulk mode only, e.g. oci://ghcr.io/myorg/charts)")
+	flags.StringVar(&ua.chartRegistry, "chart-registry", "", "OCI registry to push patched wrapper charts (e.g. oci://ghcr.io/myorg/charts)")
+	flags.StringVar(&ua.chartName, "chart", "", "Helm chart name for single chart patching mode")
+	flags.StringVar(&ua.chartVersion, "chart-version", "", "Helm chart version (required with --chart)")
+	flags.StringVar(&ua.chartRepo, "chart-repo", "", "Helm chart repository URL (required with --chart, e.g. oci://ghcr.io/vectordotdev/helm)")
 	flags.StringVarP(&ua.appImage, "image", "i", "", "Application image name and tag to patch")
 	flags.StringVarP(&ua.report, "report", "r", "", "Vulnerability report file (single-image mode) or directory of reports for patched images (bulk mode)")
 	flags.StringVarP(&ua.patchedTag, "tag", "t", "", "Tag for the patched image")

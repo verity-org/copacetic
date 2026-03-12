@@ -65,5 +65,8 @@ type Options struct {
 	ExitOnEOL     bool
 
 	// Chart patching
-	ChartRegistry string // OCI registry for pushing patched wrapper charts (bulk mode only)
+	ChartName    string // Helm chart name (single chart mode)
+	ChartVersion string // Helm chart version (single chart mode)
+	ChartRepo    string // Helm chart repository URL (single chart mode)
+	ChartRegistry string // OCI registry for pushing patched wrapper charts
 }
