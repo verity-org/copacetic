@@ -149,7 +149,7 @@ copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vect
 				if ua.chartVersion == "" || ua.chartRepo == "" {
 					return errors.New("--chart requires --chart-version and --chart-repo")
 				}
-				if ua.chartRegistry == "" {
+				if ua.chartRegistry == "" && !ua.dryRun {
 					return errors.New("--chart requires --chart-registry to push the patched wrapper chart")
 				}
 				log.Info("Starting in single chart patching mode...")

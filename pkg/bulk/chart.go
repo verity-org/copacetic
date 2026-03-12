@@ -105,26 +105,13 @@ func PatchChart(ctx context.Context, opts *types.Options) error {
 	// Step 3: Patch each discovered image sequentially.
 	var mappings []chartImageMapping
 	for _, ref := range refs {
-		imageWithTag := fmt.Sprintf("%s:%s", ref.originalRepo, ref.originalTag)
-		patchedImageRef := fmt.Sprintf("%s:%s", ref.targetRepo, ref.targetTag)
-
-		log.Infof("Patching image %s → %s...", imageWithTag, patchedImageRef)
-
-		// Build per-image options — shallow copy the global options and override image-specific fields.
-		jobOpts := *opts
-		jobOpts.Image = imageWithTag
-		jobOpts.PatchedTag = patchedImageRef
-		jobOpts.Suffix = ""
-
-		if err := patchImage(ctx, &jobOpts); err != nil {
-			log.Errorf("Failed to patch %s: %v", imageWithTag, err)
+		if err := runPatchJob(ctx, ref, opts); err != nil {
 			if !opts.IgnoreError {
-				return fmt.Errorf("failed to patch %s: %w", imageWithTag, err)
+				return err
 			}
 			continue
 		}
 
-		log.Infof("Successfully patched %s → %s", imageWithTag, patchedImageRef)
 		mappings = append(mappings, chartImageMapping{
 			ChartName:    chartSpec.Name,
 			OriginalRepo: ref.originalRepo,
@@ -197,5 +184,28 @@ func chartDryRun(refs []imageRef, chartSpec ChartSpec, opts *types.Options) erro
 		log.Infof("Dry-run results written to %s", opts.OutputJSON)
 	}
 
+	return nil
+}
+
+// runPatchJob patches a single image. It builds per-image options from the
+// base opts, calls patchImage, and returns an error on failure.
+// Used by both single-chart mode and can be called from the bulk worker pool.
+func runPatchJob(ctx context.Context, ref imageRef, opts *types.Options) error {
+	imageWithTag := fmt.Sprintf("%s:%s", ref.originalRepo, ref.originalTag)
+	patchedImageRef := fmt.Sprintf("%s:%s", ref.targetRepo, ref.targetTag)
+
+	log.Infof("Patching image %s → %s...", imageWithTag, patchedImageRef)
+
+	jobOpts := *opts
+	jobOpts.Image = imageWithTag
+	jobOpts.PatchedTag = patchedImageRef
+	jobOpts.Suffix = ""
+
+	if err := patchImage(ctx, &jobOpts); err != nil {
+		log.Errorf("Failed to patch %s: %v", imageWithTag, err)
+		return fmt.Errorf("failed to patch %s: %w", imageWithTag, err)
+	}
+
+	log.Infof("Successfully patched %s → %s", imageWithTag, patchedImageRef)
 	return nil
 }
