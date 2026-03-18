@@ -326,3 +326,50 @@ func TestHasModule(t *testing.T) {
 	assert.False(t, hasModule(deps, "golang.org/x/sys"))
 	assert.False(t, hasModule(nil, "golang.org/x/net"))
 }
+
+func TestSelectGoToolchainVersion(t *testing.T) {
+	tests := []struct {
+		name           string
+		currentVersion string
+		stdlibFix      string
+		want           string
+	}{
+		{
+			name:           "same minor series available",
+			currentVersion: "go1.23.7",
+			stdlibFix:      "1.23.8, 1.24.2",
+			want:           "1.23.8",
+		},
+		{
+			name:           "only newer minor available",
+			currentVersion: "go1.22.5",
+			stdlibFix:      "1.23.8, 1.24.2",
+			want:           "1.24.2",
+		},
+		{
+			name:           "single fix version",
+			currentVersion: "go1.25.5",
+			stdlibFix:      "1.25.8",
+			want:           "1.25.8",
+		},
+		{
+			name:           "exact match with spaces",
+			currentVersion: "go1.24.0",
+			stdlibFix:      " 1.23.8 , 1.24.2 ",
+			want:           "1.24.2",
+		},
+		{
+			name:           "empty fix version",
+			currentVersion: "go1.23.7",
+			stdlibFix:      "",
+			want:           "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := selectGoToolchainVersion(tt.currentVersion, tt.stdlibFix)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

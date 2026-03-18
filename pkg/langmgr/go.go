@@ -75,6 +75,50 @@ func goVersionFromBuildInfo(goVersion string) string {
 	return v
 }
 
+// selectGoToolchainVersion picks the best Go version from a stdlib fix version string.
+// Trivy reports stdlib fix versions like "1.23.8, 1.24.2" (comma-separated).
+// We pick the version in the same minor series as the binary's current Go version.
+// e.g., binary is go1.23.7, fixes are "1.23.8, 1.24.2" → returns "1.23.8"
+// If no same-minor version exists, returns the highest available.
+func selectGoToolchainVersion(currentGoVersion, stdlibFixVersion string) string {
+	current := strings.TrimPrefix(currentGoVersion, "go")
+	currentParts := strings.SplitN(current, ".", 3)
+	if len(currentParts) < 2 {
+		return strings.TrimSpace(strings.Split(stdlibFixVersion, ",")[0])
+	}
+	currentMinor := currentParts[0] + "." + currentParts[1] // e.g., "1.23"
+
+	// Parse comma-separated fix versions
+	var candidates []string
+	for _, v := range strings.Split(stdlibFixVersion, ",") {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			candidates = append(candidates, v)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	// Prefer a version in the same minor series
+	for _, c := range candidates {
+		if strings.HasPrefix(c, currentMinor+".") {
+			return c
+		}
+	}
+
+	// No same-minor fix available — use the highest version
+	// (this means a minor version bump, e.g., 1.23.x → 1.24.x)
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if isLessThanGoVersion(best, c) {
+			best = c
+		}
+	}
+	return best
+}
+
 // InstallUpdates implements LangManager for Go packages.
 // It detects Go binaries in the image, resolves their source code,
 // and rebuilds them with updated dependencies.
@@ -110,22 +154,26 @@ func (gm *goManager) InstallUpdates(
 	}
 
 	// Build update map: module → version
+	// Separately track stdlib fix version (needs Go compiler patch)
 	updateMap := make(map[string]string)
+	var stdlibFixVersion string
 	for _, u := range updatesToAttempt {
 		if u.FixedVersion == "" {
 			continue
 		}
-		// Skip stdlib vulns — they require Go compiler upgrade
 		if u.Name == "stdlib" {
-			log.Warnf("Go stdlib vulnerability detected (needs Go compiler upgrade from %s to %s). Not supported in v1 — consider rebuilding the image with an updated Go version.",
-				u.InstalledVersion, u.FixedVersion)
+			// stdlib vulns are fixed by using a patched Go compiler version.
+			// We'll use this to select the right golang tooling image.
+			stdlibFixVersion = u.FixedVersion
+			log.Infof("Go stdlib vulnerability detected: will use Go %s (was %s) for rebuild",
+				u.FixedVersion, u.InstalledVersion)
 			continue
 		}
 		updateMap[u.Name] = u.FixedVersion
 	}
 
-	if len(updateMap) == 0 {
-		log.Debug("No applicable Go module updates after filtering.")
+	if len(updateMap) == 0 && stdlibFixVersion == "" {
+		log.Debug("No applicable Go module or stdlib updates after filtering.")
 		return currentState, nil, nil
 	}
 
@@ -168,12 +216,14 @@ func (gm *goManager) InstallUpdates(
 			continue
 		}
 
-		// Check if this binary has any vulnerable deps
-		binaryNeedsUpdate := false
-		for mod := range updateMap {
-			if binary.MainModule == mod || hasModule(binary.Deps, mod) {
-				binaryNeedsUpdate = true
-				break
+		// Check if this binary needs an update (vulnerable deps or stdlib fix)
+		binaryNeedsUpdate := stdlibFixVersion != ""
+		if !binaryNeedsUpdate {
+			for mod := range updateMap {
+				if binary.MainModule == mod || hasModule(binary.Deps, mod) {
+					binaryNeedsUpdate = true
+					break
+				}
 			}
 		}
 		if !binaryNeedsUpdate {
@@ -195,7 +245,7 @@ func (gm *goManager) InstallUpdates(
 		log.Infof("  Source resolved via %s: %s @ %s", resolution.Method, resolution.Repo, resolution.Ref)
 
 		// Rebuild the binary
-		newState, rebuildErr := gm.rebuildBinary(ctx, &state, binary, resolution, updateMap)
+		newState, rebuildErr := gm.rebuildBinary(ctx, &state, binary, resolution, updateMap, stdlibFixVersion)
 		if rebuildErr != nil {
 			log.Warnf("Failed to rebuild binary %s: %v", binary.Path, rebuildErr)
 			errPkgs = append(errPkgs, binary.Path)
@@ -272,15 +322,26 @@ func (gm *goManager) detectGoBinaries(ctx context.Context, currentState *llb.Sta
 }
 
 // rebuildBinary rebuilds a single Go binary with updated dependencies.
+// If stdlibFixVersion is non-empty, the tooling image uses the patched Go version
+// instead of the binary's original Go version, fixing stdlib vulnerabilities.
 func (gm *goManager) rebuildBinary(
 	ctx context.Context,
 	currentState *llb.State,
 	binary *GoBinaryInfo,
 	resolution *GoSourceResolution,
 	updateMap map[string]string,
+	stdlibFixVersion string,
 ) (*llb.State, error) {
-	// Determine Go version for tooling container
+	// Determine Go version for tooling container.
+	// If there's a stdlib fix, use the patched Go version; otherwise use the binary's version.
 	goVersion := goVersionFromBuildInfo(binary.GoVersion)
+	if stdlibFixVersion != "" {
+		patchedVersion := selectGoToolchainVersion(binary.GoVersion, stdlibFixVersion)
+		if patchedVersion != "" {
+			log.Infof("Upgrading Go toolchain from %s to %s for stdlib fix", goVersion, patchedVersion)
+			goVersion = patchedVersion
+		}
+	}
 	toolingImage := fmt.Sprintf(toolingGoImageTemplate, goVersion)
 	log.Debugf("Using tooling image: %s", toolingImage)
 
