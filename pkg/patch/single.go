@@ -204,7 +204,7 @@ func patchSingleArchImage(
 	var patchResult *Result
 	eg.Go(func() error {
 		result, err := executePatchBuild(ctx, ch, bkClient, buildConfig, buildkitImageRef, &targetPlatform,
-			workingFolder, updates, ignoreError, reportFile, format, output, patchedImageName, buildChannel, opts.ExitOnEOL)
+			workingFolder, updates, ignoreError, reportFile, format, output, patchedImageName, buildChannel, opts.ExitOnEOL, opts.GoVCSURL)
 		if err != nil {
 			return err
 		}
@@ -466,6 +466,7 @@ func executePatchBuild(
 	reportFile, format, output, patchedImageName string,
 	buildChannel chan *client.SolveStatus,
 	exitOnEOL bool,
+	goVCSURL string,
 ) (*Result, error) {
 	var pkgType string
 	var validatedManifest *unversioned.UpdateManifest
@@ -504,7 +505,8 @@ func executePatchBuild(
 			IgnoreError:      ignoreError,
 			ErrorChannel:     ch,
 			ReturnState:      false, // Always solve for Docker export
-			ExitOnEOL:        exitOnEOL,
+			ExitOnEOL:           exitOnEOL,
+			GoVCSURL: goVCSURL,
 		}
 
 		// Execute the core patching logic

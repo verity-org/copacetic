@@ -924,3 +924,59 @@ func TestTrivyParserParseWithDotNet(t *testing.T) {
 		"app/OtherLib.deps.json",
 	}, jsonEntries, "same package at different paths should be separate upgrade targets")
 }
+
+func TestTrivyParserParseWithGo(t *testing.T) {
+	parser := &TrivyParser{}
+	manifest, err := parser.Parse("testdata/trivy_go.json")
+
+	assert.NoError(t, err)
+	assert.NotNil(t, manifest)
+
+	// Should have 1 OS update (libcrypto3)
+	assert.Equal(t, 1, len(manifest.OSUpdates))
+	assert.Equal(t, "libcrypto3", manifest.OSUpdates[0].Name)
+
+	// Should have Go language updates from both gobinary and gomod results.
+	// Expected unique packages:
+	//   - golang.org/x/net @ bin/prometheus (gobinary, 3 CVEs → uses highest patch level version)
+	//   - golang.org/x/crypto @ bin/prometheus (gobinary, 1 CVE)
+	//   - stdlib @ bin/prometheus (gobinary, 1 CVE — should still be included)
+	//   - golang.org/x/net @ go.sum (gomod, 1 CVE)
+	//   - github.com/prometheus/client_golang @ go.sum (gomod, 1 CVE)
+	assert.GreaterOrEqual(t, len(manifest.LangUpdates), 4, "expected at least 4 Go lang updates")
+
+	// Verify Go package types are preserved
+	goModCount := 0
+	goBinaryCount := 0
+	for _, u := range manifest.LangUpdates {
+		switch u.Type {
+		case utils.GoModules:
+			goModCount++
+		case utils.GoBinary:
+			goBinaryCount++
+		default:
+			t.Errorf("unexpected package type in LangUpdates: %s", u.Type)
+		}
+		assert.NotEmpty(t, u.Name, "package name should not be empty")
+		assert.NotEmpty(t, u.FixedVersion, "fixed version should not be empty")
+		assert.NotEmpty(t, u.PkgPath, "package path should not be empty")
+	}
+
+	assert.Greater(t, goModCount, 0, "should have at least one gomod package")
+	assert.Greater(t, goBinaryCount, 0, "should have at least one gobinary package")
+
+	// Verify specific packages are present
+	foundCrypto := false
+	foundNet := false
+	for _, u := range manifest.LangUpdates {
+		if u.Name == "golang.org/x/crypto" {
+			foundCrypto = true
+			assert.Equal(t, "v0.31.0", u.FixedVersion)
+		}
+		if u.Name == "golang.org/x/net" {
+			foundNet = true
+		}
+	}
+	assert.True(t, foundCrypto, "should find golang.org/x/crypto package")
+	assert.True(t, foundNet, "should find golang.org/x/net package")
+}

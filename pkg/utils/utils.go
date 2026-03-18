@@ -35,6 +35,8 @@ const (
 	PythonPackages = "python-pkg"
 	NodePackages   = "node-pkg"
 	DotNetPackages = "dotnet-core"
+	GoModules      = "gomod"
+	GoBinary       = "gobinary"
 
 	DefaultTempWorkingFolder = "/tmp"
 )

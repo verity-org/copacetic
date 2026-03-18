@@ -36,6 +36,7 @@ type patchArgs struct {
 	loader            string
 	pkgTypes          string
 	libraryPatchLevel string
+	goVCSURL   string
 	progress          string
 	ociDir            string
 	eolAPIBaseURL     string
@@ -100,7 +101,8 @@ copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vect
 				Platforms:         ua.platform,
 				Loader:            ua.loader,
 				PkgTypes:          ua.pkgTypes,
-				LibraryPatchLevel: ua.libraryPatchLevel,
+				LibraryPatchLevel:   ua.libraryPatchLevel,
+				GoVCSURL: ua.goVCSURL,
 				Progress:          types.DisplayMode(ua.progress),
 				OCIDir:            ua.ociDir,
 				EOLAPIBaseURL:     ua.eolAPIBaseURL,
@@ -204,6 +206,10 @@ copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vect
 		flags.StringVar(&ua.libraryPatchLevel, "library-patch-level", utils.PatchTypePatch,
 			"[EXPERIMENTAL] Library patch level preference: 'patch', 'minor', or 'major'. "+
 				"Only applicable when 'library' is included in --pkg-types. Defaults to 'patch'")
+		flags.StringVar(&ua.goVCSURL, "go-vcs-url", "",
+			"[EXPERIMENTAL] Git repo URL for Go binary rebuild when VCS info is stripped from the binary. "+
+				"Format: 'https://github.com/org/repo@v1.0' or just 'https://github.com/org/repo' (ref from image tag). "+
+				"Only applicable when 'library' is included in --pkg-types")
 	} else {
 		// Set default values when experimental flags are not enabled
 		ua.pkgTypes = utils.PkgTypeOS

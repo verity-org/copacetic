@@ -460,6 +460,31 @@ func (t *TrivyParser) ParseWithLibraryPatchLevel(file, libraryPatchLevel string)
 					}
 				}
 			}
+
+			// Check if this is a Go-related target (gomod or gobinary)
+			if r.Type == utils.GoModules || r.Type == utils.GoBinary {
+				for v := range r.Vulnerabilities {
+					vuln := &r.Vulnerabilities[v]
+					if vuln.FixedVersion != "" {
+						key := vuln.PkgName + "\x00" + vuln.PkgPath
+						if _, exists := langPackageVulns[key]; !exists {
+							langPackageVulns[key] = []trivyTypes.DetectedVulnerability{}
+							langPackageInfo[key] = unversioned.UpdatePackage{
+								Name:             vuln.PkgName,
+								Type:             string(r.Type),
+								Class:            string(r.Class),
+								InstalledVersion: vuln.InstalledVersion,
+								PkgPath:          vuln.PkgPath,
+							}
+							langPackageVulnIDs[key] = make(map[string]struct{})
+						}
+						langPackageVulns[key] = append(langPackageVulns[key], *vuln)
+						if vuln.VulnerabilityID != "" {
+							langPackageVulnIDs[key][vuln.VulnerabilityID] = struct{}{}
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -497,6 +522,12 @@ func (t *TrivyParser) ParseWithLibraryPatchLevel(file, libraryPatchLevel string)
 			patchLevelToUse := libraryPatchLevel
 			if specialPatchLevel, exists := getSpecialPackagePatchLevels()[info.Name]; exists {
 				patchLevelToUse = specialPatchLevel
+			}
+			// Go modules commonly require minor version bumps for security fixes
+			// (e.g., golang.org/x/net v0.30.0 → v0.33.0). Default to "minor" for Go
+			// packages when the user hasn't explicitly set a higher level.
+			if (info.Type == utils.GoModules || info.Type == utils.GoBinary) && patchLevelToUse == "patch" {
+				patchLevelToUse = "minor"
 			}
 
 			optimalVersion := FindOptimalFixedVersionWithPatchLevel(info.InstalledVersion, fixedVersions, patchLevelToUse)

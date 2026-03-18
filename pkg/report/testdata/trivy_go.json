@@ -1,0 +1,102 @@
+{
+  "SchemaVersion": 2,
+  "CreatedAt": "2026-03-18T00:00:00Z",
+  "ArtifactName": "quay.io/prometheus/prometheus:v3.9.1",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "OS": {
+      "Family": "alpine",
+      "Name": "3.20.0"
+    },
+    "ImageConfig": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "Results": [
+    {
+      "Target": "bin/prometheus",
+      "Class": "lang-pkgs",
+      "Type": "gobinary",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2024-45338",
+          "PkgName": "golang.org/x/net",
+          "InstalledVersion": "v0.30.0",
+          "FixedVersion": "v0.33.0",
+          "PkgPath": "bin/prometheus",
+          "Severity": "HIGH"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-22870",
+          "PkgName": "golang.org/x/net",
+          "InstalledVersion": "v0.30.0",
+          "FixedVersion": "v0.36.0",
+          "PkgPath": "bin/prometheus",
+          "Severity": "MEDIUM"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-22872",
+          "PkgName": "golang.org/x/net",
+          "InstalledVersion": "v0.30.0",
+          "FixedVersion": "v0.38.0",
+          "PkgPath": "bin/prometheus",
+          "Severity": "MEDIUM"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-45337",
+          "PkgName": "golang.org/x/crypto",
+          "InstalledVersion": "v0.28.0",
+          "FixedVersion": "v0.31.0",
+          "PkgPath": "bin/prometheus",
+          "Severity": "CRITICAL"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-12345",
+          "PkgName": "stdlib",
+          "InstalledVersion": "v1.23.7",
+          "FixedVersion": "1.23.8, 1.24.2",
+          "PkgPath": "bin/prometheus",
+          "Severity": "HIGH"
+        }
+      ]
+    },
+    {
+      "Target": "go.sum",
+      "Class": "lang-pkgs",
+      "Type": "gomod",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2024-45338",
+          "PkgName": "golang.org/x/net",
+          "InstalledVersion": "v0.30.0",
+          "FixedVersion": "v0.33.0",
+          "PkgPath": "go.sum",
+          "Severity": "HIGH"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-11111",
+          "PkgName": "github.com/prometheus/client_golang",
+          "InstalledVersion": "v1.19.0",
+          "FixedVersion": "v1.20.0",
+          "PkgPath": "go.sum",
+          "Severity": "MEDIUM"
+        }
+      ]
+    },
+    {
+      "Target": "alpine 3.20.0",
+      "Class": "os-pkgs",
+      "Type": "alpine",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2024-99999",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.3.0-r0",
+          "FixedVersion": "3.3.1-r0",
+          "Severity": "HIGH"
+        }
+      ]
+    }
+  ]
+}

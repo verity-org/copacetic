@@ -41,6 +41,9 @@ type Options struct {
 
 	// EOL configuration
 	ExitOnEOL bool
+
+	// Go rebuild configuration
+	GoVCSURL string
 }
 
 // Result contains the result of the core patching operation.
@@ -127,7 +130,7 @@ func ExecutePatchCore(patchCtx *Context, opts *Options) (*Result, error) {
 	// For normal Docker export, continue with solving but preserve states
 	// Handle Language Specific Updates
 	if updates != nil && len(updates.LangUpdates) > 0 {
-		languageManagers := langmgr.GetLanguageManagers(config, workingFolder, updates)
+		languageManagers := langmgr.GetLanguageManagers(config, workingFolder, updates, opts.GoVCSURL, opts.ImageName)
 		var langErrPkgsFromAllManagers []string
 		var combinedLangError error
 

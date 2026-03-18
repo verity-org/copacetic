@@ -57,6 +57,9 @@ type Options struct {
 	PkgTypes          string
 	LibraryPatchLevel string
 
+	// Go binary patching
+	GoVCSURL string // --go-vcs-url: VCS override for Go binary rebuild (format: repo@ref or just repo)
+
 	// Generate specific
 	OutputContext string
 

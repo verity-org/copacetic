@@ -28,7 +28,9 @@ type LangManager interface {
 
 // GetLanguageManagers returns a list of language managers that have relevant packages to process.
 // Uses a switch-based approach to determine which managers to include based on package types.
-func GetLanguageManagers(config *buildkit.Config, workingFolder string, manifest *unversioned.UpdateManifest) []LangManager {
+// goVCSURL is the optional --go-vcs-url flag value (format: repo@ref or just repo). Empty string = no override.
+// imageRef is the container image reference (used for Go source resolution).
+func GetLanguageManagers(config *buildkit.Config, workingFolder string, manifest *unversioned.UpdateManifest, goVCSURL, imageRef string) []LangManager {
 	var managers []LangManager
 
 	if manifest == nil || len(manifest.LangUpdates) == 0 {
@@ -47,6 +49,13 @@ func GetLanguageManagers(config *buildkit.Config, workingFolder string, manifest
 			managers = append(managers, &nodejsManager{config: config, workingFolder: workingFolder})
 		case utils.DotNetPackages:
 			managers = append(managers, &dotnetManager{config: config, workingFolder: workingFolder})
+		case utils.GoModules, utils.GoBinary:
+			managers = append(managers, &goManager{
+				config:        config,
+				workingFolder: workingFolder,
+				goVCSURL:      goVCSURL,
+				imageRef:      imageRef,
+			})
 		default:
 			log.Warnf("Unknown package type '%s' found in language updates", packageType)
 		}
