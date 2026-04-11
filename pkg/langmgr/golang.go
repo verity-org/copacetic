@@ -33,6 +33,8 @@ type golangManager struct {
 	config              *buildkit.Config
 	workingFolder       string
 	toolchainPatchLevel string
+	goVCSURL            string
+	imageRef            string
 }
 
 // validateGoPackageName validates a Go module name for safety and correctness.
@@ -632,6 +634,8 @@ func (gm *golangManager) attemptBinaryRebuild(
 			Strategy:   provenance.RebuildStrategyHeuristic,
 			BuildInfo:  buildInfo,
 			BinaryInfo: []*provenance.BinaryInfo{binaryInfo},
+			ImageRef:   gm.imageRef,
+			GoVCSURL:   gm.goVCSURL,
 		}
 
 		// Attempt to rebuild this binary and merge into current state

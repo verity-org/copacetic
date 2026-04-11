@@ -45,6 +45,7 @@ type patchArgs struct {
 	pkgTypes            string
 	libraryPatchLevel   string
 	toolchainPatchLevel string
+	goVCSURL            string
 	progress            string
 	ociDir              string
 	eolAPIBaseURL       string
@@ -105,6 +106,7 @@ copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vect
 				PkgTypes:            ua.pkgTypes,
 				LibraryPatchLevel:   ua.libraryPatchLevel,
 				ToolchainPatchLevel: ua.toolchainPatchLevel,
+				GoVCSURL:            ua.goVCSURL,
 				Progress:            types.DisplayMode(progressui.DisplayMode(ua.progress)),
 				OCIDir:              ua.ociDir,
 				EOLAPIBaseURL:       ua.eolAPIBaseURL,
@@ -216,6 +218,8 @@ copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vect
 				"Values: 'patch' (e.g., 1.23.0 -> 1.23.latest), 'minor' (e.g., 1.23 -> 1.25), 'major'. "+
 				"Currently supported for Go only. Requires 'library' in --pkg-types")
 		flags.Lookup("toolchain-patch-level").NoOptDefVal = utils.PatchTypePatch
+		flags.StringVar(&ua.goVCSURL, "go-vcs-url", "",
+			"[EXPERIMENTAL] Override Go source repository and ref for binary rebuilds. Format: 'https://github.com/org/repo@ref'")
 	} else {
 		ua.pkgTypes = utils.PkgTypeOS
 		ua.libraryPatchLevel = utils.PatchTypePatch
