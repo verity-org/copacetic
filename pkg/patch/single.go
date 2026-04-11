@@ -51,7 +51,6 @@ func removeIfNotDebug(workingFolder string) {
 // If sharedProgressCh is non-nil, progress is forwarded to it with platform prefix instead of displaying locally.
 func patchSingleArchImage(
 	ctx context.Context,
-	ch chan error,
 	opts *types.Options,
 	//nolint:gocritic
 	targetPlatform types.PatchPlatform,
@@ -78,6 +77,7 @@ func patchSingleArchImage(
 	}
 	pkgTypes := opts.PkgTypes
 	libraryPatchLevel := opts.LibraryPatchLevel
+	toolchainPatchLevel := opts.ToolchainPatchLevel
 
 	if reportFile == "" && output != "" {
 		log.Warn("No vulnerability report was provided, so no VEX output will be generated.")
@@ -179,8 +179,12 @@ func patchSingleArchImage(
 		return nil, err
 	}
 
-	// Create channels for build coordination
-	buildChannel := make(chan *client.SolveStatus)
+	// Create channels for build coordination.
+	// Buffer the channel to prevent backpressure from the progress display
+	// blocking BuildKit. The progrock TUI processes events slower than
+	// PlainMode due to rendering overhead; without a buffer, builds that
+	// generate heavy output (e.g. .NET patching) can stall indefinitely.
+	buildChannel := make(chan *client.SolveStatus, 128)
 	eg, ctx := errgroup.WithContext(ctx)
 
 	// Resolve image reference for BuildKit operations
@@ -203,8 +207,9 @@ func patchSingleArchImage(
 	// Start the main build process and capture preserved states
 	var patchResult *Result
 	eg.Go(func() error {
-		result, err := executePatchBuild(ctx, ch, bkClient, buildConfig, buildkitImageRef, &targetPlatform,
-			workingFolder, updates, ignoreError, reportFile, format, output, patchedImageName, buildChannel, opts.ExitOnEOL)
+		defer pipeW.Close()
+		result, err := executePatchBuild(ctx, bkClient, buildConfig, buildkitImageRef, &targetPlatform,
+			workingFolder, updates, ignoreError, reportFile, format, output, patchedImageName, buildChannel, opts.ExitOnEOL, toolchainPatchLevel)
 		if err != nil {
 			return err
 		}
@@ -455,7 +460,6 @@ func createPatchResultWithStates(imageName reference.Named, patchedImageName str
 // executePatchBuild executes the actual patch build process.
 func executePatchBuild(
 	ctx context.Context,
-	ch chan error,
 	bkClient *client.Client,
 	buildConfig *BuildConfig,
 	imageName reference.Named,
@@ -466,6 +470,7 @@ func executePatchBuild(
 	reportFile, format, output, patchedImageName string,
 	buildChannel chan *client.SolveStatus,
 	exitOnEOL bool,
+	toolchainPatchLevel string,
 ) (*Result, error) {
 	var pkgType string
 	var validatedManifest *unversioned.UpdateManifest
@@ -496,15 +501,15 @@ func executePatchBuild(
 		}
 
 		patchOpts := &Options{
-			ImageName:        imageName.String(),
-			TargetPlatform:   targetPlatform,
-			Updates:          updates,
-			ValidatedUpdates: validatedManifest,
-			WorkingFolder:    workingFolder,
-			IgnoreError:      ignoreError,
-			ErrorChannel:     ch,
-			ReturnState:      false, // Always solve for Docker export
-			ExitOnEOL:        exitOnEOL,
+			ImageName:           imageName.String(),
+			TargetPlatform:      targetPlatform,
+			Updates:             updates,
+			ValidatedUpdates:    validatedManifest,
+			WorkingFolder:       workingFolder,
+			IgnoreError:         ignoreError,
+			ReturnState:         false, // Always solve for Docker export
+			ExitOnEOL:           exitOnEOL,
+			ToolchainPatchLevel: toolchainPatchLevel,
 		}
 
 		// Execute the core patching logic
@@ -551,7 +556,6 @@ func executePatchBuild(
 		// vex document must contain at least one statement
 		if output != "" && (len(validatedManifest.OSUpdates) > 0 || len(validatedManifest.LangUpdates) > 0) {
 			if err := vex.TryOutputVexDocument(validatedManifest, pkgType, nameDigestOrTag, format, output); err != nil {
-				trySendError(ch, err)
 				return nil, err
 			}
 		}

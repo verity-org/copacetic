@@ -108,6 +108,11 @@ func validateVenvRoot(venvRoot string) error {
 	if !validVenvRootPattern.MatchString(venvRoot) {
 		return fmt.Errorf("venv root contains unsafe characters (shell metacharacters not allowed): %s", venvRoot)
 	}
+	// Reject path traversal sequences. The regex allows '.' individually, so
+	// ".." would pass the pattern check above without this explicit guard.
+	if strings.Contains(venvRoot, "..") {
+		return fmt.Errorf("venv root must not contain path traversal sequences: %s", venvRoot)
+	}
 	return nil
 }
 
@@ -309,14 +314,7 @@ func collectVendorParentNames(updates unversioned.LangUpdatePackages) map[string
 			continue
 		}
 		root := deriveVenvRoot(pkg.PkgPath)
-		already := false
-		for _, existing := range parents[root] {
-			if existing == parent {
-				already = true
-				break
-			}
-		}
-		if !already {
+		if !slices.Contains(parents[root], parent) {
 			parents[root] = append(parents[root], parent)
 		}
 	}
@@ -371,7 +369,7 @@ func (pm *pythonManager) InstallUpdates(
 	// Further partition system packages: those whose PkgPath explicitly names a
 	// site-packages directory use the targeted tooling strategy (exact --target path),
 	// because a plain "pip install" may resolve to a different location when sys.path
-	// has been customised by the image (e.g. a venv shadows /usr/local/).
+	// has been customized by the image (e.g. a venv shadows /usr/local/).
 	// Packages with a bare directory PkgPath or no PkgPath use the generic pip path.
 	explicitSiteMap := make(map[string]unversioned.LangUpdatePackages)
 	var explicitSiteDirs []string // sorted for deterministic ordering
@@ -783,7 +781,7 @@ func (pm *pythonManager) installPythonPackages(currentState *llb.State, packageS
 		installCmd := fmt.Sprintf(`sh -c '%s'`, strings.Join(installCommands, "; "))
 		return currentState.Run(
 			llb.Shlex(installCmd),
-			llb.WithProxy(buildkit.GetProxy()),
+			llb.WithProxy(utils.GetProxy()),
 		).Root()
 	}
 	// Standard single command install (fail-fast)
@@ -791,7 +789,7 @@ func (pm *pythonManager) installPythonPackages(currentState *llb.State, packageS
 	args = append(args, packageSpecs...)
 	return currentState.Run(
 		llb.Args(args),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 }
 
@@ -837,14 +835,14 @@ func (pm *pythonManager) installPythonPackagesWithPip(currentState *llb.State, p
 		args = append(args, packageSpecs...)
 		return currentState.Run(
 			llb.Args(args),
-			llb.WithProxy(buildkit.GetProxy()),
+			llb.WithProxy(utils.GetProxy()),
 		).Root()
 	}
 	args := []string{pipPath, "install", fmt.Sprintf("--timeout=%d", defaultPipInstallTimeoutSeconds)}
 	args = append(args, packageSpecs...)
 	return currentState.Run(
 		llb.Args(args),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 }
 
@@ -896,7 +894,7 @@ func (pm *pythonManager) upgradePackagesToSitePackagesDir(
 	pipInstallArgs = append(pipInstallArgs, installPkgSpecs...)
 	toolingState := llb.Image(toolingImage).Run(
 		llb.Args(pipInstallArgs),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 
 	// Build package base names (lowercase, hyphens) for cleanup.
@@ -1044,7 +1042,7 @@ func (pm *pythonManager) upgradeVenvPackagesWithTooling(
 	pipInstallArgs = append(pipInstallArgs, installPkgSpecs...)
 	toolingState := llb.Image(toolingImage).Run(
 		llb.Args(pipInstallArgs),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 
 	// Clean old package directories then copy the new ones in.
@@ -1100,7 +1098,7 @@ func (pm *pythonManager) upgradeVendorParents(
 		args = append(args, parents...)
 		upgraded := currentState.Run(
 			llb.Args(args),
-			llb.WithProxy(buildkit.GetProxy()),
+			llb.WithProxy(utils.GetProxy()),
 		).Root()
 		return &upgraded, nil
 	}
@@ -1128,7 +1126,7 @@ func (pm *pythonManager) upgradeVendorParents(
 	args = append(args, parents...)
 	upgraded := currentState.Run(
 		llb.Args(args),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 	return &upgraded, nil
 }
@@ -1192,6 +1190,11 @@ func (pm *pythonManager) upgradePackagesWithTooling(
 	if sitePkgsPath == "" {
 		return nil, nil, fmt.Errorf("unable to locate site-packages directory in target image (searched: %v)", candidatePaths)
 	}
+	// Validate sitePkgsPath to prevent shell injection via crafted image filesystem paths
+	validSitePackagesPath := regexp.MustCompile(`^/[a-zA-Z0-9/_.\-]+$`)
+	if !validSitePackagesPath.MatchString(sitePkgsPath) {
+		return nil, nil, fmt.Errorf("detected site-packages path contains invalid characters: %q", sitePkgsPath)
+	}
 	log.Infof("Detected Python site-packages path: %s", sitePkgsPath)
 
 	// Infer python version from path
@@ -1213,7 +1216,7 @@ func (pm *pythonManager) upgradePackagesWithTooling(
 	toolingInstallCmd := fmt.Sprintf("sh -c 'pip install --no-cache-dir --disable-pip-version-check --no-deps --target /copa-pkgs %s'", strings.Join(installPkgSpecs, " "))
 	toolingState := llb.Image(toolingImage).Run(
 		llb.Shlex(toolingInstallCmd),
-		llb.WithProxy(buildkit.GetProxy()),
+		llb.WithProxy(utils.GetProxy()),
 	).Root()
 
 	// Clean old versions of these packages in the detected site-packages path before copying new ones

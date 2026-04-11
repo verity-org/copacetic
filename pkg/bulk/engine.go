@@ -19,8 +19,8 @@ import (
 	"github.com/project-copacetic/copacetic/pkg/patch"
 	"github.com/project-copacetic/copacetic/pkg/types"
 	log "github.com/sirupsen/logrus"
-	helmchart "helm.sh/helm/v3/pkg/chart"
 	"gopkg.in/yaml.v3"
+	helmchart "helm.sh/helm/v3/pkg/chart"
 )
 
 // patchJobStatus represents the status of a single image patching job.

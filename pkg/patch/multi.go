@@ -23,7 +23,6 @@ import (
 // patchMultiPlatformImage patches a multi-platform image across all discovered platforms.
 func patchMultiPlatformImage(
 	ctx context.Context,
-	ch chan error,
 	opts *types.Options,
 	discoveredPlatforms []types.PatchPlatform,
 ) error {
@@ -93,8 +92,9 @@ func patchMultiPlatformImage(
 	plan := buildPatchingPlan(opts, platforms)
 	fmt.Fprintln(os.Stderr, tui.RenderPatchingPlan(plan))
 
-	// Create a shared progress channel for unified TUI display
-	sharedProgressCh := make(chan *client.SolveStatus)
+	// Create a shared progress channel for unified TUI display.
+	// Buffered to prevent backpressure from the display blocking BuildKit.
+	sharedProgressCh := make(chan *client.SolveStatus, 128)
 
 	// Count how many platforms will be patched (not preserved) to know when to close the channel
 	var patchingPlatformCount int32
@@ -112,6 +112,9 @@ func patchMultiPlatformImage(
 	// Start the unified progress display
 	displayEg, displayCtx := errgroup.WithContext(ctx)
 	common.DisplayProgress(displayCtx, displayEg, sharedProgressCh, opts.Progress)
+	if patchingPlatformCount == 0 {
+		closeProgressOnce.Do(func() { close(sharedProgressCh) })
+	}
 
 	var mu sync.Mutex
 	patchResults := []types.PatchResult{}
@@ -225,7 +228,7 @@ func patchMultiPlatformImage(
 			patchedAttempts++
 			mu.Unlock()
 
-			res, err := patchSingleArchImage(gctx, ch, &patchOpts, p, true, sharedProgressCh)
+			res, err := patchSingleArchImage(gctx, &patchOpts, p, true, sharedProgressCh)
 
 			// Track completion to know when to close shared channel
 			if completedCount.Add(1) == patchingPlatformCount {

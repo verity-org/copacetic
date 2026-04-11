@@ -28,6 +28,18 @@ func TestNewPatchCmdValidation(t *testing.T) {
 			expectedErrorContains: "--image, --config, and --chart are mutually exclusive",
 		},
 		{
+			name:                  "FAIL: Chart mode missing required fields",
+			args:                  []string{"--chart", "vector"},
+			expectValidationError: true,
+			expectedErrorContains: "--chart requires --chart-version and --chart-repo",
+		},
+		{
+			name:                  "FAIL: Dry run without config/chart",
+			args:                  []string{"--image", "alpine:latest", "--dry-run"},
+			expectValidationError: true,
+			expectedErrorContains: "--dry-run requires --config or --chart",
+		},
+		{
 			name:                  "PASS: Single image mode validation",
 			args:                  []string{"--image", "alpine:latest"},
 			expectValidationError: false, // This combination of flags is valid.

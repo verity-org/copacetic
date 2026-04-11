@@ -34,11 +34,11 @@ type PatchConfig struct {
 	Charts      []ChartSpec             `yaml:"charts,omitempty"`      // Helm charts to discover images from
 	ChartTarget *ChartTargetSpec        `yaml:"chartTarget,omitempty"` // Where to push patched wrapper charts
 	Overrides   map[string]OverrideSpec `yaml:"overrides,omitempty"`   // Tag variant overrides for chart images
-	Images      []ImageSpec             `yaml:"images,omitempty"`      // Explicitly listed images
+	Images      []ImageSpec             `yaml:"images"`
 }
 
 // ChartTargetSpec defines where to push patched wrapper charts.
-	type ChartTargetSpec struct {
+type ChartTargetSpec struct {
 	Registry string `yaml:"registry"` // OCI registry for patched charts (e.g. "oci://ghcr.io/myorg/charts")
 }
 

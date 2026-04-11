@@ -17,36 +17,45 @@ import (
 	"github.com/project-copacetic/copacetic/pkg/utils"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+
+	// Register connection helpers for buildkit.
+	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
+	_ "github.com/moby/buildkit/client/connhelper/kubepod"
+	_ "github.com/moby/buildkit/client/connhelper/nerdctlcontainer"
+	_ "github.com/moby/buildkit/client/connhelper/podmancontainer"
+	_ "github.com/moby/buildkit/client/connhelper/ssh"
+	"github.com/moby/buildkit/util/progress/progressui"
 )
 
 type patchArgs struct {
-	appImage          string
-	report            string
-	patchedTag        string
-	suffix            string
-	workingFolder     string
-	timeout           time.Duration
-	scanner           string
-	ignoreError       bool
-	format            string
-	output            string
-	bkOpts            buildkit.Opts
-	push              bool
-	platform          []string
-	loader            string
-	pkgTypes          string
-	libraryPatchLevel string
-	progress          string
-	ociDir            string
-	eolAPIBaseURL     string
-	exitOnEOL         bool
-	configFile        string
-	outputJSON        string
-	dryRun            bool
-	chartRegistry     string
-	chartName         string
-	chartVersion      string
-	chartRepo         string
+	appImage            string
+	report              string
+	patchedTag          string
+	suffix              string
+	workingFolder       string
+	timeout             time.Duration
+	scanner             string
+	ignoreError         bool
+	format              string
+	output              string
+	bkOpts              buildkit.Opts
+	push                bool
+	platform            []string
+	loader              string
+	pkgTypes            string
+	libraryPatchLevel   string
+	toolchainPatchLevel string
+	progress            string
+	ociDir              string
+	eolAPIBaseURL       string
+	exitOnEOL           bool
+	configFile          string
+	outputJSON          string
+	dryRun              bool
+	chartRegistry       string
+	chartName           string
+	chartVersion        string
+	chartRepo           string
 }
 
 func NewPatchCmd() *cobra.Command {
@@ -58,71 +67,71 @@ func NewPatchCmd() *cobra.Command {
 copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)
 copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vectordotdev/helm --chart-registry oci://ghcr.io/myorg/charts (Single Chart Patching)`,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			// Validate library patch level
 			if err := validateLibraryPatchLevel(ua.libraryPatchLevel, ua.pkgTypes); err != nil {
 				return err
 			}
 
-			// Create a context that is canceled on SIGINT/SIGTERM.
-			// This ensures BuildKit and all child operations stop promptly on Ctrl+C.
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			// Set up force-quit handler for multiple Ctrl+C presses.
-			// If the user presses Ctrl+C again while we're shutting down, exit immediately.
 			forceQuitCh := make(chan os.Signal, 1)
 			signal.Notify(forceQuitCh, os.Interrupt, syscall.SIGTERM)
 			go func() {
-				<-forceQuitCh // First signal is handled by NotifyContext above
-				<-forceQuitCh // Second signal: force quit
+				<-forceQuitCh
+				<-forceQuitCh
 				fmt.Fprintln(os.Stderr, "\nForce quit")
 				os.Exit(1)
 			}()
 			defer signal.Stop(forceQuitCh)
 
 			opts := &types.Options{
-				Image:             ua.appImage,
-				Report:            ua.report,
-				PatchedTag:        ua.patchedTag,
-				Suffix:            ua.suffix,
-				WorkingFolder:     ua.workingFolder,
-				Timeout:           ua.timeout,
-				Scanner:           ua.scanner,
-				IgnoreError:       ua.ignoreError,
-				Format:            ua.format,
-				Output:            ua.output,
-				OutputJSON:        ua.outputJSON,
-				BkAddr:            ua.bkOpts.Addr,
-				BkCACertPath:      ua.bkOpts.CACertPath,
-				BkCertPath:        ua.bkOpts.CertPath,
-				BkKeyPath:         ua.bkOpts.KeyPath,
-				Push:              ua.push,
-				Platforms:         ua.platform,
-				Loader:            ua.loader,
-				PkgTypes:          ua.pkgTypes,
-				LibraryPatchLevel: ua.libraryPatchLevel,
-				Progress:          types.DisplayMode(ua.progress),
-				OCIDir:            ua.ociDir,
-				EOLAPIBaseURL:     ua.eolAPIBaseURL,
-				ExitOnEOL:         ua.exitOnEOL,
-				ConfigFile:        ua.configFile,
-				DryRun:            ua.dryRun,
-				ChartRegistry:     ua.chartRegistry,
-				ChartName:         ua.chartName,
-				ChartVersion:      ua.chartVersion,
-				ChartRepo:         ua.chartRepo,
+				Image:               ua.appImage,
+				Report:              ua.report,
+				PatchedTag:          ua.patchedTag,
+				Suffix:              ua.suffix,
+				WorkingFolder:       ua.workingFolder,
+				Timeout:             ua.timeout,
+				Scanner:             ua.scanner,
+				IgnoreError:         ua.ignoreError,
+				Format:              ua.format,
+				Output:              ua.output,
+				BkAddr:              ua.bkOpts.Addr,
+				BkCACertPath:        ua.bkOpts.CACertPath,
+				BkCertPath:          ua.bkOpts.CertPath,
+				BkKeyPath:           ua.bkOpts.KeyPath,
+				Push:                ua.push,
+				Platforms:           ua.platform,
+				Loader:              ua.loader,
+				PkgTypes:            ua.pkgTypes,
+				LibraryPatchLevel:   ua.libraryPatchLevel,
+				ToolchainPatchLevel: ua.toolchainPatchLevel,
+				Progress:            types.DisplayMode(progressui.DisplayMode(ua.progress)),
+				OCIDir:              ua.ociDir,
+				EOLAPIBaseURL:       ua.eolAPIBaseURL,
+				ExitOnEOL:           ua.exitOnEOL,
+				ConfigFile:          ua.configFile,
+				OutputJSON:          ua.outputJSON,
+				DryRun:              ua.dryRun,
+				ChartRegistry:       ua.chartRegistry,
+				ChartName:           ua.chartName,
+				ChartVersion:        ua.chartVersion,
+				ChartRepo:           ua.chartRepo,
 			}
 
-			// Determine mode: config (bulk), chart (single chart), or image (single image)
 			hasChart := ua.chartName != ""
 			hasConfig := ua.configFile != ""
 			hasImage := ua.appImage != ""
 
-			// Mutual exclusion
 			modeCount := 0
-			if hasChart { modeCount++ }
-			if hasConfig { modeCount++ }
-			if hasImage { modeCount++ }
+			if hasChart {
+				modeCount++
+			}
+			if hasConfig {
+				modeCount++
+			}
+			if hasImage {
+				modeCount++
+			}
 
 			if modeCount == 0 {
 				return errors.New("one of --image, --config, or --chart must be provided")
@@ -135,7 +144,6 @@ copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vect
 				return errors.New("--dry-run requires --config or --chart")
 			}
 
-			// Bulk config mode
 			if hasConfig {
 				if ua.patchedTag != "" {
 					return errors.New("--config cannot be used with --tag")
@@ -144,7 +152,6 @@ copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vect
 				return bulk.PatchFromConfig(context.Background(), ua.configFile, opts)
 			}
 
-			// Single chart mode
 			if hasChart {
 				if ua.chartVersion == "" || ua.chartRepo == "" {
 					return errors.New("--chart requires --chart-version and --chart-repo")
@@ -156,11 +163,11 @@ copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vect
 				return bulk.PatchChart(ctx, opts)
 			}
 
-			// Single image mode
 			log.Info("Starting in single image patching mode...")
 			return patch.Patch(ctx, opts)
 		},
 	}
+
 	flags := patchCmd.Flags()
 	flags.StringVar(&ua.configFile, "config", "", "Path to a bulk patch YAML config file (Comprehensive update only). Cannot be used with --image or --tag.")
 	flags.StringVar(&ua.outputJSON, "output-json", "", "Write bulk patch results as JSON to the specified file path (bulk mode only)")
@@ -204,8 +211,12 @@ copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vect
 		flags.StringVar(&ua.libraryPatchLevel, "library-patch-level", utils.PatchTypePatch,
 			"[EXPERIMENTAL] Library patch level preference: 'patch', 'minor', or 'major'. "+
 				"Only applicable when 'library' is included in --pkg-types. Defaults to 'patch'")
+		flags.StringVar(&ua.toolchainPatchLevel, "toolchain-patch-level", "",
+			"[EXPERIMENTAL] Upgrade the language toolchain (e.g., Go compiler) to fix stdlib vulnerabilities. "+
+				"Values: 'patch' (e.g., 1.23.0 -> 1.23.latest), 'minor' (e.g., 1.23 -> 1.25), 'major'. "+
+				"Currently supported for Go only. Requires 'library' in --pkg-types")
+		flags.Lookup("toolchain-patch-level").NoOptDefVal = utils.PatchTypePatch
 	} else {
-		// Set default values when experimental flags are not enabled
 		ua.pkgTypes = utils.PkgTypeOS
 		ua.libraryPatchLevel = utils.PatchTypePatch
 	}
@@ -215,19 +226,16 @@ copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vect
 
 // validateLibraryPatchLevel validates the library patch level flag and its usage.
 func validateLibraryPatchLevel(libraryPatchLevel, pkgTypes string) error {
-	// Valid library patch levels
 	validLevels := map[string]bool{
 		utils.PatchTypePatch: true,
 		utils.PatchTypeMinor: true,
 		utils.PatchTypeMajor: true,
 	}
 
-	// Check if the provided level is valid
 	if !validLevels[libraryPatchLevel] {
 		return fmt.Errorf("invalid library patch level '%s': must be one of 'patch', 'minor', or 'major'", libraryPatchLevel)
 	}
 
-	// If library patch level is specified and not the default, ensure library is in pkg-types
 	if libraryPatchLevel != utils.PatchTypePatch && !strings.Contains(pkgTypes, utils.PkgTypeLibrary) {
 		return fmt.Errorf("--library-patch-level can only be used when 'library' is included in --pkg-types")
 	}
