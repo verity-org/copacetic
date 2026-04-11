@@ -850,11 +850,18 @@ fi
 	// Verify the rebuilt binary is a valid Go binary.
 	// If discovery or build failed, the LLB step above already failed —
 	// this is a secondary check that the output is actually a Go binary.
-	verifyCmd := fmt.Sprintf("%s version -m %s > /dev/null 2>&1 || { echo 'ERROR: rebuilt binary %s is not a valid Go binary'; exit 1; }",
-		goBin, outputPath, outputPath)
+	verifyScript := fmt.Sprintf(`
+if ! %s version -m %s > /dev/null 2>&1; then
+  echo "ERROR: rebuilt binary %s is not a valid Go binary"
+  exit 1
+fi
+`, goBin, outputPath, outputPath)
 	log.Debug("Verifying rebuilt binary...")
+	state = state.File(
+		llb.Mkfile("/tmp/copa_verify.sh", 0o755, []byte(verifyScript)),
+	)
 	state = state.Run(
-		llb.Shlex(fmt.Sprintf("sh -c '%s'", verifyCmd)),
+		llb.Shlex("sh /tmp/copa_verify.sh"),
 	).Root()
 
 	return state, nil
