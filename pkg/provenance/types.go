@@ -64,8 +64,9 @@ type RebuildContext struct {
 	BuildInfo *BuildInfo
 	// BinaryInfo contains information from detected Go binaries.
 	BinaryInfo []*BinaryInfo
-	ImageRef   string
-	GoVCSURL   string
+	ImageRef         string
+	GoVCSURL         string
+	ImageSourceLabel string // org.opencontainers.image.source OCI label
 }
 
 // RebuildResult contains the outcome of a rebuild attempt.
