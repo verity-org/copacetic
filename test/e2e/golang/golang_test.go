@@ -169,7 +169,7 @@ func TestGoBinaryPatchingByCategory(t *testing.T) {
 					scanResultsFile := filepath.Join(dir, "scan.json")
 					vulnsBefore := scanAndParse(t, ref, scanResultsFile, img.SkipMainModule, img.Image, testCacheDir)
 					if len(vulnsBefore) == 0 {
-						t.Skip("no vulnerabilities found in baseline scan")
+						t.Fatalf("no vulnerabilities found in baseline scan of %s; this baseline image is selected because it has known CVEs — a zero result indicates a scanner regression, stale Trivy DB, or upstream image rebuild", ref)
 					}
 
 					// Patch
@@ -217,7 +217,7 @@ func TestMultiBinaryImages(t *testing.T) {
 			scanResultsFile := filepath.Join(dir, "scan.json")
 			vulnsBefore := scanAndParse(t, ref, scanResultsFile, img.SkipMainModule, img.Image, testCacheDir)
 			if len(vulnsBefore) == 0 {
-				t.Skip("no vulnerabilities found")
+				t.Fatalf("no vulnerabilities found in baseline scan of multi-binary image %s; this baseline is selected because it has known CVEs — a zero result indicates a scanner regression, stale Trivy DB, or upstream image rebuild", ref)
 			}
 
 			t.Logf("Testing multi-binary image with %d expected binaries: %v",
@@ -278,7 +278,7 @@ func TestDistrolessImages(t *testing.T) {
 			scanResultsFile := filepath.Join(dir, "scan.json")
 			vulnsBefore := scanAndParse(t, ref, scanResultsFile, img.SkipMainModule, img.Image, testCacheDir)
 			if len(vulnsBefore) == 0 {
-				t.Skip("no vulnerabilities found")
+				t.Fatalf("no vulnerabilities found in baseline scan of distroless image %s; this baseline is selected because it has known CVEs — a zero result indicates a scanner regression, stale Trivy DB, or upstream image rebuild", ref)
 			}
 
 			t.Logf("Testing distroless/scratch image: %s (category: %s)", ref, img.Category)
