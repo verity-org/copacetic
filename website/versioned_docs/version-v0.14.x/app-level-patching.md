@@ -446,7 +446,7 @@ copa patch -i calico/node:v3.31.4 --pkg-types library \
 
 **Step 4: Image tag heuristic** — When VCS info is missing, Copa extracts the tag from the image reference (e.g., `prometheus:v3.9.1` → `v3.9.1`) and tries it as a git ref. This works for the common convention where image tags match git tags.
 
-If all four steps fail, Copa cannot clone source for the binary and preserves the original binary unchanged (no synthetic-go.mod rebuild fallback).
+If all four steps fail, Copa falls back to generating a synthetic `go.mod` from the binary's embedded dependency list, which may produce a partial rebuild.
 
 ##### Recommended: Embed VCS Metadata
 
