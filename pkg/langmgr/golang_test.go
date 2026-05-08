@@ -1,6 +1,7 @@
 package langmgr
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/project-copacetic/copacetic/pkg/buildkit"
@@ -743,6 +744,48 @@ func TestGetUniqueLatestUpdates_Go(t *testing.T) {
 	}
 }
 
+func TestRebuildFailureString(t *testing.T) {
+	tests := []struct {
+		name     string
+		failure  rebuildFailure
+		expected string
+	}{
+		{
+			name:     "no build info",
+			failure:  rebuildFailure{binaryPath: "/usr/bin/foo", reason: "no build info"},
+			expected: "/usr/bin/foo: no build info",
+		},
+		{
+			name:     "error reason",
+			failure:  rebuildFailure{binaryPath: "/usr/bin/bar", reason: "exit status 1"},
+			expected: "/usr/bin/bar: exit status 1",
+		},
+		{
+			name:     "empty reason",
+			failure:  rebuildFailure{binaryPath: "/usr/bin/baz", reason: ""},
+			expected: "/usr/bin/baz: ",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.failure.String())
+		})
+	}
+}
+
+func TestRebuildFailureSliceFormat(t *testing.T) {
+	failures := []rebuildFailure{
+		{binaryPath: "/usr/bin/foo", reason: "no build info"},
+		{binaryPath: "/usr/bin/bar", reason: "exit status 1"},
+	}
+	oldStyle := []string{
+		"/usr/bin/foo: no build info",
+		"/usr/bin/bar: exit status 1",
+	}
+	assert.Equal(t, fmt.Sprintf("%v", oldStyle), fmt.Sprintf("%v", failures),
+		"rebuildFailure slice must format identically to the old []string representation")
+}
+
 func TestCollectGoBinaryInfo(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -772,6 +815,24 @@ func TestCollectGoBinaryInfo(t *testing.T) {
 			name:      "skips non-gobinary",
 			updates:   unversioned.LangUpdatePackages{{Name: "flask", PkgPath: "app/requirements.txt", Type: "pip"}},
 			wantPaths: nil,
+		},
+		{
+			name: "includes gomod entries with PkgPath alongside gobinary",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "github.com/foo/bar", PkgPath: "src/go.mod", Type: utils.GoModules},
+				{Name: "stdlib", PkgPath: "manager", Type: utils.GoBinary, InstalledVersion: "v1.26.0"},
+			},
+			wantPaths:   []string{"src/go.mod", "manager"},
+			wantVersion: "1.26.0",
+		},
+		{
+			name: "all gomod entries are still collected",
+			updates: unversioned.LangUpdatePackages{
+				{Name: "github.com/foo/bar", PkgPath: "src/go.mod", Type: utils.GoModules},
+				{Name: "github.com/baz/qux", PkgPath: "src/go.sum", Type: utils.GoModules},
+			},
+			wantPaths:   []string{"src/go.mod", "src/go.sum"},
+			wantVersion: "",
 		},
 	}
 

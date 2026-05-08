@@ -14,6 +14,7 @@ import (
 	"github.com/project-copacetic/copacetic/pkg/common"
 	"github.com/project-copacetic/copacetic/pkg/tui"
 	"github.com/project-copacetic/copacetic/pkg/types"
+	"github.com/project-copacetic/copacetic/pkg/types/unversioned"
 	"github.com/project-copacetic/copacetic/pkg/utils"
 )
 
@@ -123,6 +124,9 @@ func patchWithContext(ctx context.Context, opts *types.Options) error {
 
 			displaySingleArchPlan(opts, &patchPlatform)
 			result, err := patchSingleArchImage(ctx, opts, patchPlatform, false, nil)
+			if result != nil {
+				logPatchSummary(result.Summary)
+			}
 			if err == nil && result != nil && result.PatchedRef != nil {
 				log.Infof("Patched image (%s): %s\n", patchPlatform.OS+"/"+patchPlatform.Architecture, result.PatchedRef)
 			}
@@ -153,6 +157,9 @@ func patchWithContext(ctx context.Context, opts *types.Options) error {
 
 			displaySingleArchPlan(opts, &patchPlatform)
 			result, err := patchSingleArchImage(ctx, opts, patchPlatform, false, nil)
+			if result != nil {
+				logPatchSummary(result.Summary)
+			}
 			if err == nil && result != nil && result.PatchedRef != nil {
 				log.Infof("Patched image (%s): %s\n", patchPlatform.OS+"/"+patchPlatform.Architecture, result.PatchedRef)
 			}
@@ -194,10 +201,21 @@ func patchWithContext(ctx context.Context, opts *types.Options) error {
 	}
 	displaySingleArchPlan(opts, &patchPlatform)
 	result, err := patchSingleArchImage(ctx, opts, patchPlatform, false, nil)
+	if result != nil {
+		logPatchSummary(result.Summary)
+	}
 	if err == nil && result != nil {
 		log.Infof("Patched image (%s): %s\n", patchPlatform.OS+"/"+patchPlatform.Architecture, result.PatchedRef.String())
 	}
 	return err
+}
+
+// logPatchSummary prints the patch summary if available.
+func logPatchSummary(summary *unversioned.PatchSummary) {
+	if summary == nil {
+		return
+	}
+	log.Infof("Patch Summary: %d total, %d patched, %d skipped", summary.Total, summary.Patched, summary.Skipped)
 }
 
 // displaySingleArchPlan shows a patching plan for single-arch images.

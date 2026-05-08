@@ -202,7 +202,7 @@ func TestConstructBuildCommand(t *testing.T) {
 			},
 		},
 		{
-			name: "build with flags",
+			name: "build with flags - ldflags quoted",
 			buildInfo: &BuildInfo{
 				CGOEnabled:  false,
 				BuildFlags:  []string{"-trimpath", "-ldflags=-s -w"},
@@ -213,8 +213,32 @@ func TestConstructBuildCommand(t *testing.T) {
 				"CGO_ENABLED=0",
 				"-o /output/server",
 				"-trimpath",
-				"-ldflags=-s -w",
+				"'-ldflags=-s -w'",
 				"./cmd/server",
+			},
+		},
+		{
+			name: "build with X flags in ldflags",
+			buildInfo: &BuildInfo{
+				CGOEnabled:  false,
+				BuildFlags:  []string{"-ldflags=-s -w -X main.version=1.0.0 -X main.commit=abc123"},
+				MainPackage: ".",
+			},
+			outputPath: "/output/app",
+			contains: []string{
+				"'-ldflags=-s -w -X main.version=1.0.0 -X main.commit=abc123'",
+			},
+		},
+		{
+			name: "single-word flag not quoted",
+			buildInfo: &BuildInfo{
+				CGOEnabled:  false,
+				BuildFlags:  []string{"-trimpath"},
+				MainPackage: ".",
+			},
+			outputPath: "/output/app",
+			contains: []string{
+				" -trimpath ",
 			},
 		},
 		{
@@ -362,6 +386,42 @@ func TestValidateBinaryPath(t *testing.T) {
 		{
 			name:    "path with dollar sign",
 			path:    "/app$HOME",
+			wantErr: true,
+			errMsg:  "unsafe characters",
+		},
+		{
+			name:    "path with space",
+			path:    "/usr/local/bin/my app",
+			wantErr: true,
+			errMsg:  "unsafe characters",
+		},
+		{
+			name:    "path with newline",
+			path:    "/usr/local/bin/app\ntouch pwned",
+			wantErr: true,
+			errMsg:  "unsafe characters",
+		},
+		{
+			name:    "path with tab",
+			path:    "/usr/local/bin/app\tpwned",
+			wantErr: true,
+			errMsg:  "unsafe characters",
+		},
+		{
+			name:    "path with carriage return",
+			path:    "/usr/local/bin/app\rpwned",
+			wantErr: true,
+			errMsg:  "unsafe characters",
+		},
+		{
+			name:    "path with wildcard asterisk",
+			path:    "/usr/local/bin/app*",
+			wantErr: true,
+			errMsg:  "unsafe characters",
+		},
+		{
+			name:    "path with wildcard question mark",
+			path:    "/usr/local/bin/app?",
 			wantErr: true,
 			errMsg:  "unsafe characters",
 		},
@@ -553,8 +613,18 @@ func TestDeriveRepoFromModulePath(t *testing.T) {
 		},
 		{
 			modulePath:  "go.opentelemetry.io/otel/exporters/otlp",
-			wantRepoURL: "https://github.com/open-telemetry/otel",
+			wantRepoURL: "https://github.com/open-telemetry/opentelemetry-go",
 			wantSubpath: "exporters/otlp",
+		},
+		{
+			modulePath:  "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
+			wantRepoURL: "https://github.com/open-telemetry/opentelemetry-go-contrib",
+			wantSubpath: "instrumentation/net/http/otelhttp",
+		},
+		{
+			modulePath:  "go.opentelemetry.io/collector/component",
+			wantRepoURL: "https://github.com/open-telemetry/opentelemetry-collector",
+			wantSubpath: "component",
 		},
 		{
 			modulePath:  "google.golang.org/grpc",
@@ -614,6 +684,142 @@ func TestRebuildBinary_SourceNotCloned_PreservesBinary(t *testing.T) {
 	assert.NotNil(t, rebuilder)
 	_ = updates
 	_ = rebuildCtx
+}
+
+func TestFormatOCILabelsForScript(t *testing.T) {
+	tests := []struct {
+		name     string
+		labels   map[string]string
+		want     string
+		wantSkip []string // substrings expected NOT to appear
+	}{
+		{
+			name:   "nil labels",
+			labels: nil,
+			want:   "",
+		},
+		{
+			name: "all valid labels",
+			labels: map[string]string{
+				"org.opencontainers.image.version":  "v1.2.3",
+				"org.opencontainers.image.revision": "ae2bbc2abcdef0123456789",
+				"org.opencontainers.image.source":   "https://github.com/foo/bar",
+			},
+			want: "OCI_VERSION=v1.2.3\nOCI_REVISION=ae2bbc2abcdef0123456789\nOCI_SOURCE=https://github.com/foo/bar\n",
+		},
+		{
+			name: "injection attempt in revision is rejected",
+			labels: map[string]string{
+				"org.opencontainers.image.revision": "abc123; rm -rf /",
+			},
+			want:     "",
+			wantSkip: []string{"rm -rf", ";"},
+		},
+		{
+			name: "injection attempt in version via command substitution is rejected",
+			labels: map[string]string{
+				"org.opencontainers.image.version": "v1.0.0$(whoami)",
+			},
+			want:     "",
+			wantSkip: []string{"whoami", "$("},
+		},
+		{
+			name: "injection attempt in source via backticks is rejected",
+			labels: map[string]string{
+				"org.opencontainers.image.source": "https://github.com/foo/bar`id`",
+			},
+			want:     "",
+			wantSkip: []string{"`", "id"},
+		},
+		{
+			name: "mixed valid and invalid - valid entries pass through",
+			labels: map[string]string{
+				"org.opencontainers.image.version":  "v1.2.3",
+				"org.opencontainers.image.revision": "abc123\nexport X=y",
+			},
+			want: "OCI_VERSION=v1.2.3\n",
+		},
+		{
+			name: "empty values skipped",
+			labels: map[string]string{
+				"org.opencontainers.image.version":  "",
+				"org.opencontainers.image.revision": "abc123",
+			},
+			want: "OCI_REVISION=abc123\n",
+		},
+		{
+			name: "unrelated label ignored",
+			labels: map[string]string{
+				"some.other.label":                 "value; with; semis",
+				"org.opencontainers.image.version": "v1.0.0",
+			},
+			want: "OCI_VERSION=v1.0.0\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatOCILabelsForScript(tt.labels)
+			assert.Equal(t, tt.want, got)
+			for _, s := range tt.wantSkip {
+				assert.NotContains(t, got, s, "injection substring should not pass validation")
+			}
+		})
+	}
+}
+
+func TestIsSafeOCIVersion(t *testing.T) {
+	cases := map[string]bool{
+		"v1.2.3":             true,
+		"1.2.3":              true,
+		"v1.2.3-rc1":         true,
+		"v1.2.3+build123":    true,
+		"v1.0.0_snapshot":    true,
+		"":                   false,
+		"v1.0.0$(whoami)":    false,
+		"v1; rm -rf /":       false,
+		"v1 2 3":             false,
+		"v1.0.0\nexport X=y": false,
+		"v1.0.0`id`":         false,
+		"v1.0.0\"malicious":  false,
+	}
+	for input, want := range cases {
+		assert.Equal(t, want, isSafeOCIVersion(input), "input=%q", input)
+	}
+}
+
+func TestIsSafeOCIRevision(t *testing.T) {
+	cases := map[string]bool{
+		"abc123":                  true,
+		"ae2bbc2abcdef0123456789": true,
+		"v1.2.3":                  true,
+		"refs/tags/v1.2.3":        true,
+		"":                        false,
+		"abc; echo x":             false,
+		"abc$(id)":                false,
+		"abc\n":                   false,
+	}
+	for input, want := range cases {
+		assert.Equal(t, want, isSafeOCIRevision(input), "input=%q", input)
+	}
+}
+
+func TestIsSafeOCISource(t *testing.T) {
+	cases := map[string]bool{
+		"https://github.com/foo/bar":     true,
+		"https://gitlab.com/foo/bar.git": true,
+		"https://github.com/foo/bar+baz": true,
+		"git@github.com:foo/bar.git":     true, // ssh-style url: safe chars only
+		"":                               false,
+		"https://evil.com/`id`":          false,
+		"https://evil.com/;rm":           false,
+		"https://evil.com/$(whoami)":     false,
+		"https://evil.com/ with space":   false,
+	}
+	for input, want := range cases {
+		got := isSafeOCISource(input)
+		assert.Equal(t, want, got, "input=%q", input)
+	}
 }
 
 func TestExtractImageTag(t *testing.T) {
