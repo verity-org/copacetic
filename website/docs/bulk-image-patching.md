@@ -26,6 +26,23 @@ target:
   registry: "ghcr.io/myorg"           # Target registry for patched images
   tag: "{{ .SourceTag }}-patched"     # Tag template (default if omitted)
 
+# Optional: discover images from Helm charts
+charts:
+  - name: "vector"
+    version: "0.53.0"
+    repository: "oci://ghcr.io/vectordotdev/helm"
+
+# Optional: where to push patched wrapper charts
+chartTarget:
+  registry: "oci://ghcr.io/myorg/charts"
+
+# Optional: chart image tag/repo overrides
+overrides:
+  vector:
+    from: "distroless-libc"
+    to: "debian"
+    valuePath: "image" # optional explicit values path
+
 images:
   - name: "nginx"
     image: "docker.io/library/nginx"  # Source registry
@@ -53,6 +70,8 @@ images:
     tags:
       strategy: "latest"
 ```
+
+When `charts` is provided, Copa renders the chart(s), discovers image references, and adds those jobs to any explicitly defined `images`.
 
 ### Tag Strategies
 
@@ -96,6 +115,8 @@ copa patch --config ./copa-bulk-config.yaml --oci-dir ./out
 | `--timeout`             | Per‑job timeout (e.g., `15m`)                                            |
 | `--ignore-errors`       | Continue processing other jobs if one fails                           |
 | `--oci-dir`             | Export patched image(s) as an OCI layout instead of pushing              |
+| `--dry-run`             | Discover tags/images and compute outputs without patching                 |
+| `--output-json`         | Write patch/dry-run results as structured JSON                            |
 
 Restrictions in bulk mode:
 
@@ -220,6 +241,30 @@ ubuntu-test        Patched   registry/ubuntu:22.04   22.04-patched-3    OK
 ### Fail-Open Behavior
 
 If Copa cannot determine whether to skip (e.g., report not found, parse errors, registry errors), it defaults to patching. This ensures scheduled jobs don't fail silently.
+
+## Chart-Aware Bulk Patching
+
+Bulk mode also supports chart-aware workflows by combining `charts`, `chartTarget`, and `overrides` in PatchConfig:
+
+- `charts`: chart sources to resolve image references from
+- `overrides`: optional source→target variant substitutions for resolved chart images
+- `chartTarget`: OCI registry where patched wrapper charts are pushed
+
+After image patching completes, Copa can generate and push patched wrapper charts that reference the patched image tags.
+
+### Single-chart mode
+
+You can patch a single chart directly without a bulk config:
+
+```bash
+copa patch \
+  --chart vector \
+  --chart-version 0.53.0 \
+  --chart-repo oci://ghcr.io/vectordotdev/helm \
+  --chart-registry oci://ghcr.io/myorg/charts
+```
+
+Add `--dry-run` to preview discovered image patch targets without patching or chart push.
 
 **Fail-open scenarios:**
 - `-r` not provided → always patches

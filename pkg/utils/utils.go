@@ -137,13 +137,12 @@ func getEnvAny(names ...string) string {
 }
 
 func GetProxy() llb.ProxyEnv {
-	proxy := llb.ProxyEnv{
+	return llb.ProxyEnv{
 		HTTPProxy:  getEnvAny("HTTP_PROXY"),
 		HTTPSProxy: getEnvAny("HTTPS_PROXY"),
 		NoProxy:    getEnvAny("NO_PROXY"),
 		AllProxy:   getEnvAny("HTTP_PROXY"),
 	}
-	return proxy
 }
 
 // localImageDescriptor tries to get the OCI image descriptor using the local Docker client.

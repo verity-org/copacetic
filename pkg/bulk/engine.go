@@ -3,6 +3,7 @@ package bulk
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"runtime"
@@ -14,10 +15,12 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/hashicorp/go-multierror"
+	"github.com/project-copacetic/copacetic/pkg/helm"
 	"github.com/project-copacetic/copacetic/pkg/patch"
 	"github.com/project-copacetic/copacetic/pkg/types"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
+	helmchart "helm.sh/helm/v3/pkg/chart"
 )
 
 // patchJobStatus represents the status of a single image patching job.
@@ -28,6 +31,22 @@ type patchJobStatus struct {
 	Status  string
 	Error   error
 	Details string
+}
+
+// chartResolution holds a downloaded Helm chart alongside its discovered images.
+type chartResolution struct {
+	Spec   ChartSpec
+	Chart  *helmchart.Chart
+	Images []helm.ChartImage
+}
+
+// chartImageMapping tracks the original→patched image mapping for chart-based patching.
+type chartImageMapping struct {
+	ChartName    string
+	OriginalRepo string
+	OriginalTag  string
+	PatchedRepo  string
+	PatchedTag   string
 }
 
 // mergeTarget merges top-level target configuration with image-level target.
@@ -96,6 +115,39 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 		return fmt.Errorf("invalid kind: expected '%s', but got '%s'", ExpectedKind, config.Kind)
 	}
 
+	if len(config.Charts) == 0 && len(config.Images) == 0 {
+		return fmt.Errorf("config must specify at least one chart or image")
+	}
+
+	if err := validateCharts(config.Charts); err != nil {
+		return fmt.Errorf("invalid chart config: %w", err)
+	}
+	if err := validateOverrides(config.Overrides); err != nil {
+		return fmt.Errorf("invalid overrides config: %w", err)
+	}
+	if err := validateChartTarget(config.ChartTarget); err != nil {
+		return fmt.Errorf("invalid chart target config: %w", err)
+	}
+	// If --chart-registry is set via CLI but no chartTarget in config, create one.
+	if opts.ChartRegistry != "" && config.ChartTarget == nil {
+		config.ChartTarget = &ChartTargetSpec{Registry: opts.ChartRegistry}
+		if err := validateChartTarget(config.ChartTarget); err != nil {
+			return fmt.Errorf("invalid --chart-registry flag: %w", err)
+		}
+	}
+
+	// Resolve chart images and merge with explicitly-listed images.
+	var chartResolutions []chartResolution
+	if len(config.Charts) > 0 {
+		var chartImages []ImageSpec
+		var err error
+		chartImages, chartResolutions, err = resolveChartImagesWithCharts(ctx, config.Charts, config.Overrides)
+		if err != nil {
+			return fmt.Errorf("failed to resolve chart images: %w", err)
+		}
+		config = mergeImageSpecs(config, chartImages)
+	}
+
 	log.Debug("Discovering all tags to calculate total job count...")
 	type job struct {
 		spec *ImageSpec
@@ -144,6 +196,7 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 	jobsChan := make(chan job, len(jobsToRun))
 	errChan := make(chan error, len(jobsToRun))
 	results := make([]patchJobStatus, 0, len(jobsToRun))
+	var imageMappings []chartImageMapping // Collect original→patched image mappings for chart generation
 
 	log.Infof("Starting bulk patch for %d image(s) defined in %s...", len(config.Images), configPath)
 
@@ -224,6 +277,20 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 				// Build the full patched image reference using target repository
 				patchedImageRef := fmt.Sprintf("%s:%s", targetRepo, finalTag)
 
+				if opts.DryRun {
+					// Dry-run: record what would be patched without patching.
+					mu.Lock()
+					results = append(results, patchJobStatus{
+						Name:   spec.Name,
+						Source: imageWithTag,
+						Target: patchedImageRef,
+						Status: "WouldPatch",
+					})
+					mu.Unlock()
+					log.Debugf("[Worker %d] --> Dry-run: would patch %s → %s", workerID, imageWithTag, patchedImageRef)
+					continue
+				}
+
 				jobOpts := *opts // Shallow copy of the global options
 				jobOpts.Image = imageWithTag
 				jobOpts.PatchedTag = patchedImageRef
@@ -245,6 +312,13 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 					log.Errorf("Failed to patch %s: %v", imageWithTag, err)
 				} else {
 					jobResult.Status = "Patched"
+					imageMappings = append(imageMappings, chartImageMapping{
+						ChartName:    spec.Name,
+						OriginalRepo: spec.Image,
+						OriginalTag:  tag,
+						PatchedRepo:  targetRepo,
+						PatchedTag:   finalTag,
+					})
 				}
 				results = append(results, jobResult)
 				mu.Unlock()
@@ -279,10 +353,63 @@ func PatchFromConfig(ctx context.Context, configPath string, opts *types.Options
 	// Print a summary of all patch jobs.
 	printSummary(results)
 
+	// Generate and push patched wrapper charts if chart target is configured.
+	if config.ChartTarget != nil && len(chartResolutions) > 0 && !opts.DryRun {
+		if err := generateAndPushPatchedCharts(chartResolutions, imageMappings, config); err != nil {
+			log.Errorf("Failed to generate/push patched charts: %v", err)
+			multiErr = multierror.Append(multiErr, err)
+		}
+	}
+
+	if opts.OutputJSON != "" {
+		if err := writeJSONResults(opts.OutputJSON, results); err != nil {
+			log.Errorf("Failed to write JSON results: %v", err)
+		}
+	}
+
 	if opts.IgnoreError {
 		return nil
 	}
 	return multiErr.ErrorOrNil()
+}
+
+// patchJobResult is the JSON-serializable form of patchJobStatus.
+type patchJobResult struct {
+	Name    string `json:"name"`
+	Source  string `json:"source"`
+	Target  string `json:"target"`
+	Status  string `json:"status"`
+	Error   string `json:"error,omitempty"`
+	Details string `json:"details,omitempty"`
+}
+
+// writeJSONResults serializes the patch job results to a JSON file at the given path.
+func writeJSONResults(path string, results []patchJobStatus) error {
+	jsonResults := make([]patchJobResult, len(results))
+	for i, r := range results {
+		jr := patchJobResult{
+			Name:    r.Name,
+			Source:  r.Source,
+			Target:  r.Target,
+			Status:  r.Status,
+			Details: r.Details,
+		}
+		if r.Error != nil {
+			jr.Error = r.Error.Error()
+		}
+		jsonResults[i] = jr
+	}
+
+	data, err := json.MarshalIndent(jsonResults, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal results to JSON: %w", err)
+	}
+
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("failed to write JSON results to %s: %w", path, err)
+	}
+
+	return nil
 }
 
 // resolveTargetTag resolves the target tag for a patched image based on the provided TargetSpec and the source tag.
@@ -306,6 +433,117 @@ func resolveTargetTag(target TargetSpec, sourceTag string) (string, error) {
 	}
 
 	return builder.String(), nil
+}
+
+// resolveChartImages downloads and renders each Helm chart, extracts container
+// images from the rendered manifests, and converts them to ImageSpec entries
+// ready for the patch pipeline. Errors per chart are accumulated but non-fatal
+// (processing continues for remaining charts).
+func resolveChartImages(ctx context.Context, charts []ChartSpec, overrides map[string]OverrideSpec) ([]ImageSpec, error) {
+	specs, _, err := resolveChartImagesWithCharts(ctx, charts, overrides)
+	return specs, err
+}
+
+// resolveChartImagesWithCharts is like resolveChartImages but also returns the
+// downloaded chart objects and their discovered images for later use in patched
+// chart generation.
+func resolveChartImagesWithCharts(ctx context.Context, charts []ChartSpec, overrides map[string]OverrideSpec) ([]ImageSpec, []chartResolution, error) {
+	var allImages []helm.ChartImage
+	var resolutions []chartResolution
+	var errs *multierror.Error
+
+	for _, chartSpec := range charts {
+		log.Infof("Downloading Helm chart '%s' v%s from %s...", chartSpec.Name, chartSpec.Version, chartSpec.Repository)
+		ch, err := helm.DownloadChart(chartSpec.Name, chartSpec.Version, chartSpec.Repository)
+		if err != nil {
+			errs = multierror.Append(errs, fmt.Errorf("chart '%s': %w", chartSpec.Name, err))
+			continue
+		}
+
+		// Convert bulk.OverrideSpec to helm.OverrideSpec
+		helmOverrides := toHelmOverrides(overrides)
+		images, err := helm.DiscoverChartImages(ch, helmOverrides)
+		if err != nil {
+			errs = multierror.Append(errs, fmt.Errorf("chart '%s': %w", chartSpec.Name, err))
+			continue
+		}
+
+		log.Infof("Found %d image(s) in chart '%s'", len(images), chartSpec.Name)
+		allImages = append(allImages, images...)
+		resolutions = append(resolutions, chartResolution{
+			Spec:   chartSpec,
+			Chart:  ch,
+			Images: images,
+		})
+	}
+
+	if errs.ErrorOrNil() != nil {
+		log.Warnf("Encountered errors resolving chart images:\n%s", errs.Error())
+	}
+
+	return chartImagesToSpecs(allImages), resolutions, errs.ErrorOrNil()
+}
+
+// toHelmOverrides converts the bulk package's OverrideSpec map to the helm package's OverrideSpec map.
+func toHelmOverrides(overrides map[string]OverrideSpec) map[string]helm.OverrideSpec {
+	if overrides == nil {
+		return nil
+	}
+	result := make(map[string]helm.OverrideSpec, len(overrides))
+	for k, v := range overrides {
+		result[k] = helm.OverrideSpec{From: v.From, To: v.To}
+	}
+	return result
+}
+
+// chartImagesToSpecs converts helm.ChartImage entries to ImageSpec entries using
+// the "list" tag strategy with the exact pinned tag from the chart.
+func chartImagesToSpecs(images []helm.ChartImage) []ImageSpec {
+	specs := make([]ImageSpec, 0, len(images))
+	for _, img := range images {
+		specs = append(specs, ImageSpec{
+			Name:  img.Repository,
+			Image: img.Repository,
+			Tags: TagStrategy{
+				Strategy: StrategyList,
+				List:     []string{img.Tag},
+			},
+		})
+	}
+	return specs
+}
+
+// mergeImageSpecs merges chart-discovered ImageSpecs with the explicitly-listed ones.
+// Explicit images take precedence: if a chart image has the same repository as an
+// explicit image, the chart image is dropped. Returns a new PatchConfig (immutable).
+func mergeImageSpecs(config PatchConfig, chartImages []ImageSpec) PatchConfig {
+	// Build a set of explicit image repositories for deduplication.
+	explicitRefs := make(map[string]struct{}, len(config.Images))
+	for _, img := range config.Images {
+		explicitRefs[img.Image] = struct{}{}
+	}
+
+	merged := make([]ImageSpec, len(config.Images))
+	copy(merged, config.Images)
+
+	for _, chartImg := range chartImages {
+		if _, exists := explicitRefs[chartImg.Image]; exists {
+			log.Debugf("Skipping chart-discovered image '%s': overridden by explicit image spec", chartImg.Image)
+			continue
+		}
+		merged = append(merged, chartImg)
+		explicitRefs[chartImg.Image] = struct{}{} // prevent chart-to-chart duplicates
+	}
+
+	return PatchConfig{
+		APIVersion:  config.APIVersion,
+		Kind:        config.Kind,
+		Target:      config.Target,
+		ChartTarget: config.ChartTarget,
+		Charts:      config.Charts,
+		Overrides:   config.Overrides,
+		Images:      merged,
+	}
 }
 
 // printSummary prints a formatted summary table of all patch jobs.
@@ -337,4 +575,112 @@ func printSummary(results []patchJobStatus) {
 		log.Warnf("Failed to flush summary table writer: %v", err)
 	}
 	log.Infof("\n\nBulk Patch Summary:\n%s", buf.String())
+}
+
+// generateAndPushPatchedCharts creates wrapper Helm charts for each chart resolution
+// and pushes them to the configured OCI registry.
+func generateAndPushPatchedCharts(resolutions []chartResolution, mappings []chartImageMapping, config PatchConfig) error {
+	if config.ChartTarget == nil || config.ChartTarget.Registry == "" {
+		return nil
+	}
+
+	// Extract explicit value paths from overrides
+	explicitPaths := make(map[string]string)
+	for key, o := range config.Overrides {
+		if o.ValuePath != "" {
+			explicitPaths[key] = o.ValuePath
+		}
+	}
+
+	var errs *multierror.Error
+
+	for _, res := range resolutions {
+		// Filter mappings for this chart's images
+		chartMappings := filterMappingsForChart(res, mappings)
+		if len(chartMappings) == 0 {
+			log.Infof("No successfully patched images for chart '%s', skipping chart generation", res.Spec.Name)
+			continue
+		}
+
+		// Resolve value paths using auto-detection + explicit overrides
+		valuePaths := helm.ResolveImageValuePaths(res.Chart.Values, res.Images, explicitPaths)
+		if len(valuePaths) == 0 {
+			log.Warnf("No value paths detected for chart '%s' — auto-detection failed for all images. Skipping chart generation. Use overrides.valuePath to specify paths manually.", res.Spec.Name)
+			continue
+		}
+		// Build the wrapper chart
+		helmMappings := toHelmImageMappings(chartMappings)
+		spec := helm.ChartSourceSpec{
+			Name:       res.Spec.Name,
+			Version:    res.Spec.Version,
+			Repository: res.Spec.Repository,
+		}
+		patchedChart, err := helm.BuildPatchedChart(res.Chart, spec, helmMappings, valuePaths)
+		if err != nil {
+			errs = multierror.Append(errs, fmt.Errorf("chart '%s': failed to build patched chart: %w", res.Spec.Name, err))
+			continue
+		}
+
+		// Push to OCI registry
+		ociRef := fmt.Sprintf("%s/%s:%s",
+			strings.TrimSuffix(config.ChartTarget.Registry, "/"),
+			patchedChart.Name(),
+			patchedChart.Metadata.Version,
+		)
+
+		log.Infof("Packaging and pushing patched chart '%s' to %s...", patchedChart.Name(), ociRef)
+		result, err := helm.PackageAndPush(patchedChart, ociRef)
+		if err != nil {
+			errs = multierror.Append(errs, fmt.Errorf("chart '%s': failed to push: %w", res.Spec.Name, err))
+			continue
+		}
+
+		log.Infof("Successfully pushed patched chart '%s' → %s", patchedChart.Name(), result.Ref)
+	}
+
+	return errs.ErrorOrNil()
+}
+
+// filterMappingsForChart returns only the image mappings that correspond to images
+// discovered from a specific chart, matching by both repository and tag to prevent
+// cross-chart pollution when multiple charts reference the same repo with different tags.
+func filterMappingsForChart(res chartResolution, mappings []chartImageMapping) []chartImageMapping {
+	// Build a set of repo+tag pairs from this chart's discovered images
+	type repoTag struct{ repo, tag string }
+	chartImages := make(map[repoTag]bool)
+	for _, img := range res.Images {
+		chartImages[repoTag{repo: img.Repository, tag: img.Tag}] = true
+	}
+
+	var filtered []chartImageMapping
+	for _, m := range mappings {
+		// Exact repo+tag match
+		if chartImages[repoTag{repo: m.OriginalRepo, tag: m.OriginalTag}] {
+			filtered = append(filtered, m)
+			continue
+		}
+		// Suffix repo match + tag match (handles registry prefix differences)
+		for _, img := range res.Images {
+			if m.OriginalTag == img.Tag &&
+				(helm.MatchRepositoryPattern(m.OriginalRepo, img.Repository) || helm.MatchRepositoryPattern(img.Repository, m.OriginalRepo)) {
+				filtered = append(filtered, m)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
+// toHelmImageMappings converts bulk chart image mappings to helm.ImageMapping.
+func toHelmImageMappings(mappings []chartImageMapping) []helm.ImageMapping {
+	result := make([]helm.ImageMapping, len(mappings))
+	for i, m := range mappings {
+		result[i] = helm.ImageMapping{
+			OriginalRepo: m.OriginalRepo,
+			OriginalTag:  m.OriginalTag,
+			PatchedRepo:  m.PatchedRepo,
+			PatchedTag:   m.PatchedTag,
+		}
+	}
+	return result
 }

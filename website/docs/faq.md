@@ -181,6 +181,20 @@ If Copa cannot complete the report check (e.g., no matching report, parse error,
 
 Skip detection works with any scanner Copa supports (Trivy, native format, custom plugins). You provide the reports, Copa parses them. This maintains separation of concerns: you control when and how scanning happens.
 
+## Can Copa patch Helm charts?
+
+Yes. Copa supports chart-aware patching in two ways:
+
+1. **Bulk config mode** using `charts`, `chartTarget`, and optional `overrides` in PatchConfig
+2. **Single-chart mode** using `--chart`, `--chart-version`, `--chart-repo`, and `--chart-registry`
+
+In both modes, Copa patches discovered chart images first, then generates/pushes a patched wrapper chart that points to patched image tags.
+
+## What do `--dry-run` and `--output-json` do in bulk/chart workflows?
+
+- `--dry-run` computes and reports what Copa would patch without creating patched images/charts.
+- `--output-json` writes the computed/actual patch results to a JSON file for automation and CI reporting.
+
 ## Does Copa cause a buildup of patched layers on each patch?
 
 No. To prevent a buildup of layers, Copa discards the previous patch layer with each new patch. Each subsequent patch removes the earlier patch layer and creates a new one, which includes all patches applied since the original base image Copa started with. Essentially, Copa is creating a new layer with the latest patch, based on the base/original image. This new layer is a combination (or squash) of both the previous updates and the new updates requested. Discarding the patch layer also reduces the size of the resulting patched images in the future.

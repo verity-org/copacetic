@@ -13,6 +13,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// errSourceNotCloned is returned when source code cannot be cloned and no
+// build can be attempted. The caller should skip the binary gracefully.
+var errSourceNotCloned = fmt.Errorf("source code not available for rebuild")
+
 // discoverAndBuildScript is a shell script that discovers the main package
 // directory in a cloned Go repository and builds the binary from it.
 // Arguments: $1=binary-name $2=output-path $3=explicit-main-pkg
@@ -124,8 +128,10 @@ if [ -n "$FIRST_DIR" ]; then
     exit $?
 fi
 
-# Nothing found
-echo "ERROR: no buildable Go source found for $BINARY_NAME"
+# Nothing found - fail the build so the original binary is preserved
+echo "ERROR: no buildable Go source found for $BINARY_NAME in cloned repository"
+echo "The source was cloned but no main package could be discovered."
+echo "Tried: explicit path, root dir, cmd/<name>/, cmd/*/, main.go matching, first main.go"
 exit 1
 `
 
@@ -372,6 +378,16 @@ func (r *Rebuilder) RebuildBinary(
 	// Build the new binary with updated dependencies (outputs to /output/<name>)
 	buildState, err := r.buildBinaryWithUpdates(baseImage, rebuildCtx, buildInfo, updates, platform, outputPath, rebuildCtx.ImageLabels)
 	if err != nil {
+		if err == errSourceNotCloned {
+			// Source not available — can't rebuild binary, but this is not a fatal error.
+			// Return the original target state unchanged so the binary is preserved.
+			result.Success = false
+			result.Error = fmt.Errorf("source code not available for %s (module: %s) — binary preserved, Go vulnerabilities remain",
+				binaryPath, buildInfo.ModulePath)
+			result.Warnings = append(result.Warnings, result.Error.Error())
+			log.Warnf("%v", result.Error)
+			return *targetState, result, nil
+		}
 		result.Error = fmt.Errorf("failed to rebuild binary %s (module: %s, Go: %s): %w",
 			binaryPath, buildInfo.ModulePath, buildInfo.GoVersion, err)
 		return llb.State{}, result, result.Error
@@ -881,22 +897,15 @@ func (r *Rebuilder) buildBinaryWithUpdates(
 			log.Debug("Cloned source code from Git repository")
 		}
 	} else {
-		log.Debugf("Could not clone source (will generate go.mod): %v", err)
+		log.Warnf("Could not clone source code: %v", err)
+		log.Warnf("Cannot rebuild Go binary without source — original binary will be preserved")
+		return llb.State{}, errSourceNotCloned
 	}
 
 	state = state.Dir(workdir)
 	log.Debugf("Working directory: %s", workdir)
 
-	// If we couldn't clone source, generate a minimal go.mod
-	if !sourceCloned && buildInfo.ModulePath != "" {
-		goMod := r.generateGoMod(buildInfo, updates)
-		log.Debugf("Generated go.mod content:\n%s", goMod)
-		state = state.File(llb.Mkdir(workdir, 0o755, llb.WithParents(true)))
-		state = state.File(
-			llb.Mkfile(filepath.Join(workdir, "go.mod"), 0o644, []byte(goMod)),
-		)
-		log.Debug("Generated go.mod from dependency information")
-	}
+	// Source was cloned successfully (early return above if not).
 
 	goBin := "/usr/local/go/bin/go"
 
@@ -937,10 +946,14 @@ func (r *Rebuilder) buildBinaryWithUpdates(
 	// Run mod tidy to sync go.sum after dependency updates.
 	// This is needed both for generated go.mod and for cloned source where
 	// go get may have added transitive dependencies not in the original go.sum.
+	// The -e flag tolerates broken upstream go.mod files (missing transitive
+	// packages, stale module paths) so a CVE patch is not blocked by unrelated
+	// upstream module hygiene issues. The subsequent `go build` will still
+	// fail loudly if the patched module graph cannot produce a working binary.
 	{
-		log.Debug("Running go mod tidy...")
+		log.Debug("Running go mod tidy -e...")
 		state = state.Run(
-			llb.Shlexf("%s mod tidy", goBin),
+			llb.Shlexf("%s mod tidy -e", goBin),
 			llb.WithProxy(utils.GetProxy()),
 		).Root()
 	}
@@ -981,41 +994,34 @@ fi
 		return llb.State{}, fmt.Errorf("unsafe build command: %w", err)
 	}
 
-	if sourceCloned {
-		binaryName := filepath.Base(outputPath)
-		log.Debugf("Using discovery+build script for %s (explicit pkg: %s)", binaryName, mainPkg)
+	// Source is always cloned at this point (early return above if not).
+	binaryName := filepath.Base(outputPath)
+	log.Infof("Using discovery+build script for %s (explicit pkg: %s)", binaryName, mainPkg)
 
-		// Write the build command prefix to a file so the discovery script can
-		// read it without shell escaping issues (ldflags often contain quotes).
-		state = state.File(
-			llb.Mkfile("/tmp/copa_build_prefix", 0o644, []byte(buildPrefix)),
-		)
+	// Write the build command prefix to a file so the discovery script can
+	// read it without shell escaping issues (ldflags often contain quotes).
+	state = state.File(
+		llb.Mkfile("/tmp/copa_build_prefix", 0o644, []byte(buildPrefix)),
+	)
 
-		// Write OCI image labels to a file so the discovery script can inject
-		// version metadata via -ldflags -X when the original binary has no ldflags.
-		ociLabelsContent := formatOCILabelsForScript(imageLabels)
-		state = state.File(
-			llb.Mkfile("/tmp/copa_oci_labels", 0o644, []byte(ociLabelsContent)),
-		)
+	// Write OCI image labels to a file so the discovery script can inject
+	// version metadata via -ldflags -X when the original binary has no ldflags.
+	ociLabelsContent := formatOCILabelsForScript(imageLabels)
+	state = state.File(
+		llb.Mkfile("/tmp/copa_oci_labels", 0o644, []byte(ociLabelsContent)),
+	)
 
-		state = state.File(
-			llb.Mkfile("/tmp/copa_discover_build.sh", 0o755, []byte(discoverAndBuildScript)),
-		)
-		state = state.Run(
-			llb.Shlex(fmt.Sprintf("sh /tmp/copa_discover_build.sh %s %s %s", binaryName, outputPath, mainPkg)),
-			llb.WithProxy(utils.GetProxy()),
-		).Root()
-	} else {
-		// No source cloned (generated go.mod). Let the build fail if it can't find the package.
-		buildCmd := buildPrefix + " " + mainPkg
-		log.Debugf("Build command (no source): %s", buildCmd)
-		state = state.Run(
-			llb.Shlex(fmt.Sprintf("sh -c '%s'", strings.ReplaceAll(buildCmd, "'", "'\"'\"'"))),
-			llb.WithProxy(utils.GetProxy()),
-		).Root()
-	}
+	state = state.File(
+		llb.Mkfile("/tmp/copa_discover_build.sh", 0o755, []byte(discoverAndBuildScript)),
+	)
+	state = state.Run(
+		llb.Shlex(fmt.Sprintf("sh /tmp/copa_discover_build.sh %s %s %s", binaryName, outputPath, mainPkg)),
+		llb.WithProxy(utils.GetProxy()),
+	).Root()
 
 	// Verify the rebuilt binary is a valid Go binary.
+	// If discovery or build failed, the LLB step above already failed —
+	// this is a secondary check that the output is actually a Go binary.
 	verifyScript := fmt.Sprintf(`
 if ! %s version -m %s > /dev/null 2>&1; then
   echo "ERROR: rebuilt binary %s is not a valid Go binary"

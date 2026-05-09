@@ -446,7 +446,7 @@ copa patch -i calico/node:v3.31.4 --pkg-types library \
 
 **Step 4: Image tag heuristic** — When VCS info is missing, Copa extracts the tag from the image reference (e.g., `prometheus:v3.9.1` → `v3.9.1`) and tries it as a git ref. This works for the common convention where image tags match git tags.
 
-If all four steps fail, Copa falls back to generating a synthetic `go.mod` from the binary's embedded dependency list, which may produce a partial rebuild.
+If all four steps fail, Copa cannot clone source for the binary and preserves the original binary unchanged (no synthetic-go.mod rebuild fallback).
 
 ##### Recommended: Embed VCS Metadata
 
@@ -549,6 +549,17 @@ When all resolution methods fail:
 WARN   Binary /usr/bin/mybinary has no VCS commit info (likely built without .git directory).
        Source clone will not be possible; rebuild may fail.
 ```
+
+#### Tolerance for broken upstream go.mod
+
+When patching Go binaries, copa runs `go mod tidy -e` (rather than the
+stricter `go mod tidy`) after applying the requested module version
+bumps. The `-e` flag instructs the Go toolchain to continue past
+errors loading packages that are unrelated to the CVE patch — a common
+situation when upstream projects ship a `go.mod` that does not survive
+a fresh tidy under a modern Go toolchain. The patched binary is still
+rebuilt and rescanned end-to-end, so any real regression is caught by
+the post-patch vulnerability scan rather than masked.
 
 ### .NET
 

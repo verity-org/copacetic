@@ -51,6 +51,12 @@ type patchArgs struct {
 	eolAPIBaseURL       string
 	exitOnEOL           bool
 	configFile          string
+	outputJSON          string
+	dryRun              bool
+	chartRegistry       string
+	chartName           string
+	chartVersion        string
+	chartRepo           string
 }
 
 func NewPatchCmd() *cobra.Command {
@@ -59,25 +65,21 @@ func NewPatchCmd() *cobra.Command {
 		Use:   "patch",
 		Short: "Patch container image(s) with upgrade packages specified by a vulnerability report or by comprehensive update",
 		Example: `copa patch -i images/python:3.7-alpine -r trivy.json -t 3.7-alpine-patched (Single Image Patching)
-copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
+copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)
+copa patch --chart vector --chart-version 0.53.0 --chart-repo oci://ghcr.io/vectordotdev/helm --chart-registry oci://ghcr.io/myorg/charts (Single Chart Patching)`,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			// Validate library patch level
 			if err := validateLibraryPatchLevel(ua.libraryPatchLevel, ua.pkgTypes); err != nil {
 				return err
 			}
 
-			// Create a context that is canceled on SIGINT/SIGTERM.
-			// This ensures BuildKit and all child operations stop promptly on Ctrl+C.
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			// Set up force-quit handler for multiple Ctrl+C presses.
-			// If the user presses Ctrl+C again while we're shutting down, exit immediately.
 			forceQuitCh := make(chan os.Signal, 1)
 			signal.Notify(forceQuitCh, os.Interrupt, syscall.SIGTERM)
 			go func() {
-				<-forceQuitCh // First signal is handled by NotifyContext above
-				<-forceQuitCh // Second signal: force quit
+				<-forceQuitCh
+				<-forceQuitCh
 				fmt.Fprintln(os.Stderr, "\nForce quit")
 				os.Exit(1)
 			}()
@@ -105,38 +107,79 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 				LibraryPatchLevel:   ua.libraryPatchLevel,
 				ToolchainPatchLevel: ua.toolchainPatchLevel,
 				GoVCSURL:            ua.goVCSURL,
-				Progress:            progressui.DisplayMode(ua.progress),
+				Progress:            types.DisplayMode(progressui.DisplayMode(ua.progress)),
 				OCIDir:              ua.ociDir,
 				EOLAPIBaseURL:       ua.eolAPIBaseURL,
 				ExitOnEOL:           ua.exitOnEOL,
 				ConfigFile:          ua.configFile,
+				OutputJSON:          ua.outputJSON,
+				DryRun:              ua.dryRun,
+				ChartRegistry:       ua.chartRegistry,
+				ChartName:           ua.chartName,
+				ChartVersion:        ua.chartVersion,
+				ChartRepo:           ua.chartRepo,
 			}
 
-			if ua.configFile == "" && ua.appImage == "" {
-				return errors.New("either --config or --image must be provided")
+			hasChart := ua.chartName != ""
+			hasConfig := ua.configFile != ""
+			hasImage := ua.appImage != ""
+
+			modeCount := 0
+			if hasChart {
+				modeCount++
+			}
+			if hasConfig {
+				modeCount++
+			}
+			if hasImage {
+				modeCount++
 			}
 
-			// bulk patch
-			if ua.configFile != "" {
-				if ua.appImage != "" || ua.patchedTag != "" {
-					return errors.New("--config cannot be used with --image or --tag")
+			if modeCount == 0 {
+				return errors.New("one of --image, --config, or --chart must be provided")
+			}
+			if modeCount > 1 {
+				return errors.New("--image, --config, and --chart are mutually exclusive")
+			}
+
+			if ua.dryRun && !hasConfig && !hasChart {
+				return errors.New("--dry-run requires --config or --chart")
+			}
+
+			if hasConfig {
+				if ua.patchedTag != "" {
+					return errors.New("--config cannot be used with --tag")
 				}
-
 				log.Info("Starting in bulk image patching mode...")
-
 				return bulk.PatchFromConfig(context.Background(), ua.configFile, opts)
 			}
-			if ua.appImage == "" {
-				return errors.New("--image is required when not using --config")
+
+			if hasChart {
+				if ua.chartVersion == "" || ua.chartRepo == "" {
+					return errors.New("--chart requires --chart-version and --chart-repo")
+				}
+				if ua.chartRegistry == "" && !ua.dryRun {
+					return errors.New("--chart requires --chart-registry to push the patched wrapper chart")
+				}
+				log.Info("Starting in single chart patching mode...")
+				return bulk.PatchChart(ctx, opts)
 			}
+
 			log.Info("Starting in single image patching mode...")
 			return patch.Patch(ctx, opts)
 		},
 	}
+
 	flags := patchCmd.Flags()
 	flags.StringVar(&ua.configFile, "config", "", "Path to a bulk patch YAML config file (Comprehensive update only). Cannot be used with --image or --tag.")
+	flags.StringVar(&ua.outputJSON, "output-json", "", "Write bulk patch results as JSON to the specified file path (bulk mode only)")
+	flags.BoolVar(&ua.dryRun, "dry-run", false, "Simulate patching: discover images and compute targets without patching (requires --config or --chart; use --output-json to capture results)")
+	flags.StringVar(&ua.chartRegistry, "chart-registry", "", "OCI registry to push patched wrapper charts (e.g. oci://ghcr.io/myorg/charts)")
+	flags.StringVar(&ua.chartName, "chart", "", "Helm chart name for single chart patching mode")
+	flags.StringVar(&ua.chartVersion, "chart-version", "", "Helm chart version (required with --chart)")
+	flags.StringVar(&ua.chartRepo, "chart-repo", "", "Helm chart repository URL (required with --chart, e.g. oci://ghcr.io/vectordotdev/helm)")
 	flags.StringVarP(&ua.appImage, "image", "i", "", "Application image name and tag to patch")
-	flags.StringVarP(&ua.report, "report", "r", "", "Vulnerability report file or directory of reports")
+	flags.StringVarP(&ua.report, "report", "r", "", "Vulnerability report file (single-image mode) or directory of reports for patched images (bulk mode)")
 	flags.StringVarP(&ua.patchedTag, "tag", "t", "", "Tag for the patched image")
 	flags.StringVarP(&ua.suffix, "tag-suffix", "", "patched",
 		"Suffix for the patched image (if no explicit --tag provided)")
@@ -178,7 +221,6 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 		flags.StringVar(&ua.goVCSURL, "go-vcs-url", "",
 			"[EXPERIMENTAL] Override Go source repository and ref for binary rebuilds. Format: 'https://github.com/org/repo@ref'")
 	} else {
-		// Set default values when experimental flags are not enabled
 		ua.pkgTypes = utils.PkgTypeOS
 		ua.libraryPatchLevel = utils.PatchTypePatch
 	}
@@ -188,19 +230,16 @@ copa patch --config copa-bulk-config.yaml --push (Bulk Image Patching)`,
 
 // validateLibraryPatchLevel validates the library patch level flag and its usage.
 func validateLibraryPatchLevel(libraryPatchLevel, pkgTypes string) error {
-	// Valid library patch levels
 	validLevels := map[string]bool{
 		utils.PatchTypePatch: true,
 		utils.PatchTypeMinor: true,
 		utils.PatchTypeMajor: true,
 	}
 
-	// Check if the provided level is valid
 	if !validLevels[libraryPatchLevel] {
 		return fmt.Errorf("invalid library patch level '%s': must be one of 'patch', 'minor', or 'major'", libraryPatchLevel)
 	}
 
-	// If library patch level is specified and not the default, ensure library is in pkg-types
 	if libraryPatchLevel != utils.PatchTypePatch && !strings.Contains(pkgTypes, utils.PkgTypeLibrary) {
 		return fmt.Errorf("--library-patch-level can only be used when 'library' is included in --pkg-types")
 	}

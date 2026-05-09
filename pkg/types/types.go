@@ -2,7 +2,6 @@ package types
 
 import (
 	"github.com/distribution/reference"
-	"github.com/moby/buildkit/client/llb"
 	ispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/project-copacetic/copacetic/pkg/types/unversioned"
@@ -49,7 +48,7 @@ type PatchResult struct {
 	OriginalRef  reference.Named
 	PatchedDesc  *ispec.Descriptor
 	PatchedRef   reference.Named
-	PatchedState *llb.State                // BuildKit state for OCI export
+	PatchedState any                       // *llb.State; opaque to keep pkg/types buildkit-free
 	ConfigData   []byte                    // Image config data
 	Summary      *unversioned.PatchSummary // Patch summary, nil if unavailable
 }
